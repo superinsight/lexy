@@ -87,11 +87,11 @@ export async function startGoogleAuth(): Promise<void> {
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await generateCodeChallenge(codeVerifier);
 
-  sessionStorage.setItem("google_code_verifier", codeVerifier);
+  localStorage.setItem("google_code_verifier", codeVerifier);
 
   const redirectUri = `${window.location.origin}/oauth/google/callback`;
   const state = crypto.randomUUID();
-  sessionStorage.setItem("google_oauth_state", state);
+  localStorage.setItem("google_oauth_state", state);
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -113,25 +113,36 @@ export async function handleGoogleCallback(
   code: string,
   state: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const savedState = sessionStorage.getItem("google_oauth_state");
+  console.log("[Google OAuth] Starting callback handler");
+
+  const savedState = localStorage.getItem("google_oauth_state");
+  console.log("[Google OAuth] State check:", { received: state, saved: savedState });
   if (state !== savedState) {
-    return { success: false, error: "Invalid OAuth state" };
+    return {
+      success: false,
+      error: `Invalid OAuth state (received: ${state?.slice(0, 8)}..., saved: ${savedState?.slice(0, 8) ?? "null"}...)`,
+    };
   }
 
-  const codeVerifier = sessionStorage.getItem("google_code_verifier");
+  const codeVerifier = localStorage.getItem("google_code_verifier");
   if (!codeVerifier) {
-    return { success: false, error: "Missing code verifier" };
+    console.error("[Google OAuth] Missing code verifier in localStorage");
+    return { success: false, error: "Missing code verifier - session may have expired" };
   }
+  console.log("[Google OAuth] Code verifier found");
 
   const clientId = getGoogleClientId();
   const clientSecret = getGoogleClientSecret();
   if (!clientId) {
+    console.error("[Google OAuth] Missing client ID");
     return { success: false, error: "Google Client ID not configured" };
   }
+  console.log("[Google OAuth] Client ID found, has secret:", !!clientSecret);
 
   const redirectUri = `${window.location.origin}/oauth/google/callback`;
 
   try {
+    console.log("[Google OAuth] Exchanging code for tokens...");
     const tokenBody = new URLSearchParams({
       code,
       client_id: clientId,
@@ -152,6 +163,7 @@ export async function handleGoogleCallback(
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
+      console.error("[Google OAuth] Token exchange failed:", errorText);
       return { success: false, error: `Token exchange failed: ${errorText}` };
     }
 
@@ -161,6 +173,10 @@ export async function handleGoogleCallback(
       expires_in: number;
       scope: string;
     };
+    console.log(
+      "[Google OAuth] Token exchange successful, has refresh_token:",
+      !!tokenData.refresh_token,
+    );
 
     const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
@@ -170,8 +186,10 @@ export async function handleGoogleCallback(
     if (userInfoResponse.ok) {
       const userInfo = (await userInfoResponse.json()) as { email?: string };
       email = userInfo.email;
+      console.log("[Google OAuth] Got user email:", email);
     }
 
+    console.log("[Google OAuth] Saving credentials to gateway...");
     await client.request("integrations.google.save", {
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
@@ -179,12 +197,14 @@ export async function handleGoogleCallback(
       scopes: tokenData.scope.split(" "),
       email,
     });
+    console.log("[Google OAuth] Credentials saved successfully");
 
-    sessionStorage.removeItem("google_code_verifier");
-    sessionStorage.removeItem("google_oauth_state");
+    localStorage.removeItem("google_code_verifier");
+    localStorage.removeItem("google_oauth_state");
 
     return { success: true };
   } catch (err) {
+    console.error("[Google OAuth] Exception:", err);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -253,7 +273,7 @@ export function renderSettingsPanel(
 
   return `
     <div class="settings-overlay" data-action="close-settings">
-      <div class="settings-panel" onclick="event.stopPropagation()">
+      <div class="settings-panel">
         <div class="settings-header">
           <h2>Settings</h2>
           <button class="settings-close" data-action="close-settings">&times;</button>
@@ -299,12 +319,17 @@ export function attachSettingsHandlers(
 ): void {
   container.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
-    const action =
-      target.dataset.action ?? target.closest<HTMLElement>("[data-action]")?.dataset.action;
+    const actionEl = target.closest<HTMLElement>("[data-action]");
+    const action = target.dataset.action ?? actionEl?.dataset.action;
 
     switch (action) {
       case "close-settings":
-        onClose();
+        if (
+          target.classList.contains("settings-overlay") ||
+          target.classList.contains("settings-close")
+        ) {
+          onClose();
+        }
         break;
       case "connect-google":
         onConnectGoogle();

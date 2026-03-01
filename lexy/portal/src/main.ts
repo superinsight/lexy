@@ -7,6 +7,7 @@ import {
   disconnectGoogle,
   renderSettingsPanel,
   attachSettingsHandlers,
+  handleGoogleCallback,
 } from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -20,6 +21,11 @@ const settingsBtn = $<HTMLButtonElement>("settings");
 const settingsContainerEl = $<HTMLDivElement>("settings-container");
 
 const urlParams = new URL(window.location.href).searchParams;
+
+// Check for OAuth callback parameters
+const pendingOAuthCode = urlParams.get("code");
+const pendingOAuthState = urlParams.get("state");
+const pendingOAuthError = urlParams.get("error");
 
 const gatewayUrl =
   urlParams.get("gateway") ??
@@ -125,11 +131,43 @@ async function pollForUpdates() {
   }
 }
 
+function cleanOAuthParams() {
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.searchParams.delete("code");
+  cleanUrl.searchParams.delete("state");
+  cleanUrl.searchParams.delete("scope");
+  cleanUrl.searchParams.delete("authuser");
+  cleanUrl.searchParams.delete("prompt");
+  cleanUrl.searchParams.delete("error");
+  cleanUrl.searchParams.delete("error_description");
+  cleanUrl.searchParams.delete("iss");
+  window.history.replaceState({}, "", cleanUrl.toString());
+}
+
 const client = new GatewayClient({
   url: gatewayUrl,
   token,
   password,
   onConnected: async () => {
+    // Handle pending OAuth callback first
+    if (pendingOAuthError) {
+      alert(`Google auth failed: ${urlParams.get("error_description") || pendingOAuthError}`);
+      cleanOAuthParams();
+    } else if (pendingOAuthCode && pendingOAuthState) {
+      try {
+        setStatus("Completing Google authentication...");
+        const result = await handleGoogleCallback(client, pendingOAuthCode, pendingOAuthState);
+        if (result.success) {
+          alert("Google account connected successfully!");
+        } else {
+          alert(`Failed to connect Google: ${result.error}`);
+        }
+      } catch (err) {
+        alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      cleanOAuthParams();
+    }
+
     setStatus("Connected", "connected");
     updateSendButton();
     await loadHistory(client, state);

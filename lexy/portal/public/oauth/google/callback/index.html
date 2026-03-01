@@ -60,8 +60,32 @@
     </div>
 
     <script type="module">
-      import { GatewayClient } from "/src/gateway.ts";
-      import { handleGoogleCallback } from "/src/settings.ts";
+      console.log("[Callback Page] Script starting...");
+      
+      // Global error handler to catch any uncaught errors
+      window.onerror = (msg, url, line, col, error) => {
+        console.error("[Callback Page] Global error:", { msg, url, line, col, error });
+        const el = document.getElementById("content");
+        if (el) {
+          el.innerHTML = `<div class="error-text">Script error: ${msg}</div><a href="/" class="btn">Back to Lexy</a>`;
+        }
+      };
+
+      let GatewayClient, handleGoogleCallback;
+      try {
+        const gatewayModule = await import("/src/gateway.ts");
+        const settingsModule = await import("/src/settings.ts");
+        GatewayClient = gatewayModule.GatewayClient;
+        handleGoogleCallback = settingsModule.handleGoogleCallback;
+        console.log("[Callback Page] Modules loaded successfully");
+      } catch (err) {
+        console.error("[Callback Page] Failed to load modules:", err);
+        document.getElementById("content").innerHTML = `
+          <div class="error-text">Failed to load modules: ${err.message}</div>
+          <a href="/" class="btn">Back to Lexy</a>
+        `;
+        throw err;
+      }
 
       const contentEl = document.getElementById("content");
 
@@ -114,26 +138,54 @@
         const token = localStorage.getItem("gateway_token");
         const password = localStorage.getItem("gateway_password");
 
+        let timeoutId = null;
+        let completed = false;
+
         const client = new GatewayClient({
           url: gatewayUrl,
           token: token || undefined,
           password: password || undefined,
           onConnected: async () => {
-            const result = await handleGoogleCallback(client, code, state);
-            if (result.success) {
-              showSuccess();
-            } else {
-              showError(result.error || "Unknown error");
+            if (completed) return;
+            try {
+              console.log("[OAuth Callback] Connected to gateway, processing callback...");
+              const result = await handleGoogleCallback(client, code, state);
+              if (completed) return;
+              completed = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              if (result.success) {
+                console.log("[OAuth Callback] Success!");
+                showSuccess();
+              } else {
+                console.error("[OAuth Callback] Failed:", result.error);
+                showError(result.error || "Unknown error");
+              }
+            } catch (err) {
+              if (completed) return;
+              completed = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              console.error("[OAuth Callback] Exception:", err);
+              showError(err.message || String(err));
+            } finally {
+              client.stop();
             }
-            client.stop();
           },
-          onDisconnected: () => {},
+          onDisconnected: () => {
+            if (!completed) {
+              console.log("[OAuth Callback] Gateway disconnected");
+            }
+          },
         });
 
+        console.log("[OAuth Callback] Connecting to gateway:", gatewayUrl);
         client.start();
 
-        setTimeout(() => {
-          showError("Connection timeout - please check your gateway configuration");
+        timeoutId = setTimeout(() => {
+          if (!completed) {
+            completed = true;
+            console.error("[OAuth Callback] Connection timeout");
+            showError("Connection timeout - please check your gateway configuration");
+          }
         }, 30000);
       }
 

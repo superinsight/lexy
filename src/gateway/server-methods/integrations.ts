@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
   upsertAuthProfile,
 } from "../../agents/auth-profiles.js";
@@ -73,6 +74,9 @@ function saveGoogleCredentials(
       agentDir,
     });
 
+    // Clear runtime cache so subsequent reads get fresh data from disk
+    clearRuntimeAuthProfileStoreSnapshots();
+
     return { success: true };
   } catch (err) {
     return {
@@ -101,6 +105,9 @@ function clearGoogleCredentials(agentDir?: string): { success: boolean; error?: 
     const storePath = path.join(storeDir, "auth-profiles.json");
     fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
 
+    // Clear runtime cache so subsequent reads get fresh data from disk
+    clearRuntimeAuthProfileStoreSnapshots();
+
     return { success: true };
   } catch (err) {
     return {
@@ -112,11 +119,21 @@ function clearGoogleCredentials(agentDir?: string): { success: boolean; error?: 
 
 export const integrationsHandlers: GatewayRequestHandlers = {
   "integrations.google.status": async ({ respond }) => {
+    console.log("[integrations] google.status called");
     const status = loadGoogleStatus();
+    console.log("[integrations] google.status result:", status);
     respond(true, status);
   },
 
   "integrations.google.save": async ({ params, respond }) => {
+    console.log("[integrations] google.save called with params:", {
+      hasAccessToken: !!params.accessToken,
+      hasRefreshToken: !!params.refreshToken,
+      expiresIn: params.expiresIn,
+      email: params.email,
+      scopesCount: (params.scopes as string[] | undefined)?.length,
+    });
+
     const accessToken = params.accessToken as string | undefined;
     const refreshToken = params.refreshToken as string | undefined;
     const expiresIn = params.expiresIn as number | undefined;
@@ -124,6 +141,7 @@ export const integrationsHandlers: GatewayRequestHandlers = {
     const email = params.email as string | undefined;
 
     if (!accessToken || typeof expiresIn !== "number") {
+      console.error("[integrations] google.save validation failed");
       respond(
         false,
         undefined,
@@ -139,6 +157,8 @@ export const integrationsHandlers: GatewayRequestHandlers = {
       scopes,
       email,
     });
+
+    console.log("[integrations] google.save result:", result);
 
     if (result.success) {
       respond(true, { success: true });

@@ -91,7 +91,8 @@ function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boole
   if (typeof params.fetch?.enabled === "boolean") {
     return params.fetch.enabled;
   }
-  return true;
+  // Disabled by default for HIPAA compliance - prevents data leakage to third-party services
+  return false;
 }
 
 function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {

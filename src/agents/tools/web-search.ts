@@ -278,10 +278,8 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
   if (typeof params.search?.enabled === "boolean") {
     return params.search.enabled;
   }
-  if (params.sandboxed) {
-    return true;
-  }
-  return true;
+  // Disabled by default for HIPAA compliance - prevents data leakage to third-party search providers
+  return false;
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {

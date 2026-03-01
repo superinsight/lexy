@@ -1,17 +1,17 @@
 {
-  "name": "openclaw",
+  "name": "lexy",
   "version": "2026.2.27",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/lexy-ai/lexy#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/lexy-ai/lexy/issues"
   },
   "license": "BUSL-1.1",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/lexy-ai/lexy.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"

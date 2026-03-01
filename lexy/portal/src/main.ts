@@ -18,11 +18,17 @@ const password = new URL(window.location.href).searchParams.get("password") ?? u
 const state = createChatState(sessionKey);
 
 function renderMessages() {
-  const allMessages: Array<{ role: string; content: string; isStreaming?: boolean }> = [
-    ...state.messages,
-  ];
+  const allMessages: Array<{
+    role: string;
+    content: string;
+    isStreaming?: boolean;
+    isThinking?: boolean;
+  }> = [...state.messages];
 
-  if (state.streaming !== null) {
+  // Show typing indicator when waiting for response
+  if (state.runId !== null && (state.streaming === null || state.streaming === "")) {
+    allMessages.push({ role: "assistant", content: "", isThinking: true });
+  } else if (state.streaming !== null && state.streaming !== "") {
     allMessages.push({ role: "assistant", content: state.streaming, isStreaming: true });
   }
 
@@ -40,6 +46,17 @@ function renderMessages() {
     .map((msg) => {
       const roleClass = msg.role === "user" ? "user" : "assistant";
       const streamingClass = msg.isStreaming ? "streaming" : "";
+
+      if (msg.isThinking) {
+        return `<div class="message assistant thinking">
+          <div class="typing-indicator">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>`;
+      }
+
       const content = escapeHtml(msg.content);
       return `<div class="message ${roleClass} ${streamingClass}">${content}</div>`;
     })
@@ -134,7 +151,7 @@ inputEl.addEventListener("input", () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 150) + "px";
 });
 
-sendBtn.addEventListener("click", handleSend);
+sendBtn.addEventListener("click", () => void handleSend());
 
 setStatus("Connecting...");
 renderMessages();

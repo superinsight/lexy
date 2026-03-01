@@ -113,6 +113,8 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
       limit: 200,
     });
     if (Array.isArray(res.messages)) {
+      const prevLastMessage = state.messages[state.messages.length - 1];
+
       state.messages = res.messages
         .map((m) => {
           const msg = m as Record<string, unknown>;
@@ -128,6 +130,19 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
           };
         })
         .filter((m): m is Message => m !== null);
+
+      // If we were waiting for a response and a new assistant message arrived, reset thinking state
+      const newLastMessage = state.messages[state.messages.length - 1];
+      if (state.runId !== null && newLastMessage?.role === "assistant") {
+        const isNewMessage =
+          !prevLastMessage ||
+          prevLastMessage.role !== "assistant" ||
+          prevLastMessage.content !== newLastMessage.content;
+        if (isNewMessage) {
+          state.runId = null;
+          state.streaming = null;
+        }
+      }
     }
   } catch (err) {
     console.error("Failed to load history:", err);

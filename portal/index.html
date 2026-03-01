@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lexy | AI Legal Assistant</title>
+    <link rel="icon" type="image/svg+xml" href="/public/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div class="logo">
+          <img src="/public/favicon.svg" alt="Lexy" class="logo-icon" />
+          <span>Lexy</span>
+        </div>
+        <div class="status" id="status">Connecting...</div>
+      </header>
+      <main class="chat-container">
+        <div class="messages" id="messages"></div>
+        <div class="input-area">
+          <textarea
+            id="input"
+            placeholder="Type your message..."
+            rows="1"
+          ></textarea>
+          <button id="send" type="button">Send</button>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

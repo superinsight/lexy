@@ -1,5 +1,13 @@
 import { createChatState, loadHistory, sendMessage, handleEvent } from "./chat";
 import { GatewayClient } from "./gateway";
+import {
+  createSettingsState,
+  loadGoogleStatus,
+  startGoogleAuth,
+  disconnectGoogle,
+  renderSettingsPanel,
+  attachSettingsHandlers,
+} from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -8,12 +16,19 @@ const messagesEl = $<HTMLDivElement>("messages");
 const inputEl = $<HTMLTextAreaElement>("input");
 const sendBtn = $<HTMLButtonElement>("send");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
+const settingsBtn = $<HTMLButtonElement>("settings");
+const settingsContainerEl = $<HTMLDivElement>("settings-container");
+
+const urlParams = new URL(window.location.href).searchParams;
 
 const gatewayUrl =
-  new URL(window.location.href).searchParams.get("gateway") ??
+  urlParams.get("gateway") ??
+  localStorage.getItem("gateway_url") ??
   `ws://${window.location.hostname}:18789`;
-const token = new URL(window.location.href).searchParams.get("token") ?? undefined;
-const password = new URL(window.location.href).searchParams.get("password") ?? undefined;
+
+const token = urlParams.get("token") ?? localStorage.getItem("gateway_token") ?? undefined;
+
+const password = urlParams.get("password") ?? localStorage.getItem("gateway_password") ?? undefined;
 
 function generateSessionKey(): string {
   const timestamp = Date.now();
@@ -23,6 +38,16 @@ function generateSessionKey(): string {
 
 let currentSessionKey = new URL(window.location.href).searchParams.get("session") ?? "portal-admin";
 let state = createChatState(currentSessionKey);
+const settingsState = createSettingsState();
+
+// Store gateway config for persistence and OAuth callback
+localStorage.setItem("gateway_url", gatewayUrl);
+if (token) {
+  localStorage.setItem("gateway_token", token);
+}
+if (password) {
+  localStorage.setItem("gateway_password", password);
+}
 
 function renderMessages() {
   const allMessages: Array<{
@@ -186,6 +211,44 @@ async function handleNewSession() {
 }
 
 newSessionBtn.addEventListener("click", () => void handleNewSession());
+
+function renderSettings() {
+  settingsContainerEl.innerHTML = renderSettingsPanel(
+    settingsState,
+    closeSettings,
+    handleConnectGoogle,
+    handleDisconnectGoogle,
+  );
+  attachSettingsHandlers(
+    settingsContainerEl,
+    closeSettings,
+    handleConnectGoogle,
+    handleDisconnectGoogle,
+  );
+}
+
+function openSettings() {
+  settingsState.visible = true;
+  void loadGoogleStatus(client, settingsState).then(renderSettings);
+  renderSettings();
+}
+
+function closeSettings() {
+  settingsState.visible = false;
+  renderSettings();
+}
+
+function handleConnectGoogle() {
+  void startGoogleAuth();
+}
+
+async function handleDisconnectGoogle() {
+  await disconnectGoogle(client);
+  await loadGoogleStatus(client, settingsState);
+  renderSettings();
+}
+
+settingsBtn.addEventListener("click", openSettings);
 
 setStatus("Connecting...");
 renderMessages();

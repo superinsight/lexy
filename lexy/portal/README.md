@@ -38,6 +38,24 @@ The portal connects to the Lexy gateway. Make sure the gateway is running:
 pnpm gateway:watch
 ```
 
+## Google Workspace Integration
+
+To enable Google Workspace authentication from the portal:
+
+1. Create OAuth credentials in [Google Cloud Console](https://console.cloud.google.com/):
+   - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
+   - Choose **"Web application"** as the application type
+   - Add authorized redirect URI: `http://localhost:5174/oauth/google/callback` (or your deployed URL)
+
+2. Set environment variables before building:
+
+```bash
+export VITE_GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export VITE_GOOGLE_CLIENT_SECRET="your-client-secret"  # Optional for PKCE flow
+```
+
+3. Users can then click the Settings icon (gear) in the portal to connect their Google account.
+
 ## URL Parameters
 
 The portal accepts the following URL parameters:

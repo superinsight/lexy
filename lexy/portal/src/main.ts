@@ -7,15 +7,22 @@ const statusEl = $<HTMLDivElement>("status");
 const messagesEl = $<HTMLDivElement>("messages");
 const inputEl = $<HTMLTextAreaElement>("input");
 const sendBtn = $<HTMLButtonElement>("send");
+const newSessionBtn = $<HTMLButtonElement>("new-session");
 
 const gatewayUrl =
   new URL(window.location.href).searchParams.get("gateway") ??
   `ws://${window.location.hostname}:18789`;
-const sessionKey = new URL(window.location.href).searchParams.get("session") ?? "portal-admin";
 const token = new URL(window.location.href).searchParams.get("token") ?? undefined;
 const password = new URL(window.location.href).searchParams.get("password") ?? undefined;
 
-const state = createChatState(sessionKey);
+function generateSessionKey(): string {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  return `portal-${timestamp}-${random}`;
+}
+
+let currentSessionKey = new URL(window.location.href).searchParams.get("session") ?? "portal-admin";
+let state = createChatState(currentSessionKey);
 
 function renderMessages() {
   const allMessages: Array<{
@@ -152,6 +159,33 @@ inputEl.addEventListener("input", () => {
 });
 
 sendBtn.addEventListener("click", () => void handleSend());
+
+async function handleNewSession() {
+  // Generate a new session key
+  currentSessionKey = generateSessionKey();
+
+  // Update the URL without reloading
+  const url = new URL(window.location.href);
+  url.searchParams.set("session", currentSessionKey);
+  window.history.pushState({}, "", url.toString());
+
+  // Reset state with new session key
+  state = createChatState(currentSessionKey);
+
+  // Clear messages display
+  renderMessages();
+
+  // If connected, reload history for new session (will be empty)
+  if (client.connected) {
+    await loadHistory(client, state);
+    renderMessages();
+  }
+
+  // Focus input for new conversation
+  inputEl.focus();
+}
+
+newSessionBtn.addEventListener("click", () => void handleNewSession());
 
 setStatus("Connecting...");
 renderMessages();

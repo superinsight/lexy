@@ -177,6 +177,33 @@ export async function sendMessage(
 }
 
 export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
+  // Handle agent events for real-time streaming
+  if (evt.event === "agent") {
+    const payload = evt.payload as
+      | {
+          runId?: string;
+          sessionKey?: string;
+          stream?: string;
+          data?: { text?: string };
+        }
+      | undefined;
+
+    // Check if this is a streaming assistant event for our session
+    const isOurSession =
+      payload?.sessionKey === state.sessionKey ||
+      payload?.sessionKey === `agent:main:${state.sessionKey}`;
+
+    if (payload?.stream === "assistant" && isOurSession && payload.data?.text) {
+      const text = payload.data.text;
+      const current = state.streaming ?? "";
+      if (!current || text.length >= current.length) {
+        state.streaming = text;
+      }
+      return true;
+    }
+    return false;
+  }
+
   if (evt.event !== "chat") {
     return false;
   }
@@ -191,7 +218,16 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
       }
     | undefined;
 
-  if (!payload || payload.sessionKey !== state.sessionKey) {
+  if (!payload) {
+    return false;
+  }
+
+  // Check session key match (handle both direct and prefixed formats)
+  const isOurSession =
+    payload.sessionKey === state.sessionKey ||
+    payload.sessionKey === `agent:main:${state.sessionKey}`;
+
+  if (!isOurSession) {
     return false;
   }
 
@@ -200,25 +236,31 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
   if (eventState === "delta") {
     const text = extractText(payload.message);
     if (typeof text === "string") {
-      state.streaming = text;
+      const current = state.streaming ?? "";
+      if (!current || text.length >= current.length) {
+        state.streaming = text;
+      }
     }
     return true;
   }
 
   if (eventState === "final") {
     const text = extractText(payload.message);
-    state.messages.push({
-      role: "assistant",
-      content: text ?? state.streaming ?? "",
-      timestamp: Date.now(),
-    });
+    const finalContent = text ?? state.streaming ?? "";
+    if (finalContent.trim()) {
+      state.messages.push({
+        role: "assistant",
+        content: finalContent,
+        timestamp: Date.now(),
+      });
+    }
     state.streaming = null;
     state.runId = null;
     return true;
   }
 
   if (eventState === "aborted") {
-    if (state.streaming) {
+    if (state.streaming?.trim()) {
       state.messages.push({
         role: "assistant",
         content: state.streaming,

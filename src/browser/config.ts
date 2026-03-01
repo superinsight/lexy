@@ -219,7 +219,7 @@ export function resolveBrowserConfig(
     };
   }
 
-  const headless = cfg?.headless === true;
+  const headless = cfg?.headless !== false;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;

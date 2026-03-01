@@ -213,7 +213,11 @@ export const browserHandlers: GatewayRequestHandlers = {
 
     const ready = await startBrowserControlServiceFromConfig();
     if (!ready) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "web access is disabled by default for security"),
+      );
       return;
     }
 

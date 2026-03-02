@@ -35,8 +35,33 @@ function looksLikeJson(text: string): boolean {
   return false;
 }
 
+function repairMojibake(text: string): string {
+  // Fix common UTF-8 to Latin-1 mojibake patterns
+  // These occur when UTF-8 bytes are misinterpreted as Latin-1/Windows-1252
+  return text
+    .replace(/\u00e2\u20ac\u201d/g, "\u2014") // em dash
+    .replace(/\u00e2\u20ac\u201c/g, "\u2013") // en dash
+    .replace(/\u00e2\u20ac\u02dc/g, "\u2018") // left single quote
+    .replace(/\u00e2\u20ac\u2122/g, "\u2019") // right single quote
+    .replace(/\u00e2\u20ac\u0153/g, "\u201c") // left double quote
+    .replace(/\u00e2\u20ac\u009d/g, "\u201d") // right double quote
+    .replace(/\u00e2\u20ac\u00a6/g, "\u2026") // ellipsis
+    .replace(/\u00c3\u00a9/g, "\u00e9") // e with acute
+    .replace(/\u00c3\u00a8/g, "\u00e8") // e with grave
+    .replace(/\u00c3\u00a0/g, "\u00e0") // a with grave
+    .replace(/\u00c3\u00a2/g, "\u00e2") // a with circumflex
+    .replace(/\u00c3\u00ae/g, "\u00ee") // i with circumflex
+    .replace(/\u00c3\u00b4/g, "\u00f4") // o with circumflex
+    .replace(/\u00c3\u00bb/g, "\u00fb") // u with circumflex
+    .replace(/\u00c3\u00a7/g, "\u00e7") // c with cedilla
+    .replace(/\u00c3\u00b1/g, "\u00f1"); // n with tilde
+}
+
 function cleanText(text: string): string {
   let cleaned = text;
+
+  // Repair mojibake (UTF-8 bytes misread as Latin-1)
+  cleaned = repairMojibake(cleaned);
 
   // Remove thinking tags
   cleaned = cleaned.replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, "");

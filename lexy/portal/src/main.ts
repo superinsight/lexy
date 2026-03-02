@@ -96,7 +96,11 @@ function renderMessages() {
       }
 
       const content = escapeHtml(msg.content);
-      return `<div class="message ${roleClass} ${streamingClass}">${content}</div>`;
+      const time = formatTimestamp(msg.timestamp);
+      return `<div class="message ${roleClass} ${streamingClass}">
+        <div class="message-content">${content}</div>
+        <div class="message-time">${time}</div>
+      </div>`;
     })
     .join("");
 
@@ -107,6 +111,26 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  if (isToday) {
+    return timeStr;
+  }
+  if (isYesterday) {
+    return `Yesterday ${timeStr}`;
+  }
+  const dateStr = date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dateStr} ${timeStr}`;
 }
 
 function setStatus(text: string, className: string = "") {

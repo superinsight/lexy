@@ -145,8 +145,6 @@ body {
   padding: 0.875rem 1.125rem;
   border-radius: 1.25rem;
   line-height: 1.6;
-  white-space: pre-wrap;
-  word-wrap: break-word;
   font-size: 0.9375rem;
 }
 
@@ -168,6 +166,26 @@ body {
 
 .message.streaming {
   opacity: 0.85;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.message-time {
+  font-size: 0.6875rem;
+  margin-top: 0.375rem;
+  opacity: 0.6;
+}
+
+.message.user .message-time {
+  text-align: right;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.message.assistant .message-time {
+  color: var(--text-muted);
 }
 
 .message.error {

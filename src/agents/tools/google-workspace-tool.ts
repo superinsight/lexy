@@ -208,6 +208,63 @@ const GmailModifyLabelsSchema = Type.Object({
   ),
 });
 
+const GmailCreateDraftSchema = Type.Object({
+  action: Type.Literal("gmail_create_draft"),
+  to: Type.String({ description: "Recipient email address" }),
+  subject: Type.String({ description: "Email subject line" }),
+  body: Type.String({ description: "Email body content (plain text)" }),
+  cc: Type.Optional(Type.String({ description: "CC recipients (comma-separated)" })),
+  bcc: Type.Optional(Type.String({ description: "BCC recipients (comma-separated)" })),
+});
+
+const GmailListDraftsSchema = Type.Object({
+  action: Type.Literal("gmail_list_drafts"),
+  max_results: Type.Optional(
+    Type.Number({
+      description: "Maximum number of drafts to return (default: 10)",
+      minimum: 1,
+      maximum: 50,
+    }),
+  ),
+});
+
+const GmailUpdateDraftSchema = Type.Object({
+  action: Type.Literal("gmail_update_draft"),
+  draft_id: Type.String({ description: "The draft ID to update" }),
+  to: Type.String({ description: "Recipient email address" }),
+  subject: Type.String({ description: "Email subject line" }),
+  body: Type.String({ description: "Email body content (plain text)" }),
+  cc: Type.Optional(Type.String({ description: "CC recipients (comma-separated)" })),
+  bcc: Type.Optional(Type.String({ description: "BCC recipients (comma-separated)" })),
+});
+
+const GmailDeleteDraftSchema = Type.Object({
+  action: Type.Literal("gmail_delete_draft"),
+  draft_id: Type.String({ description: "The draft ID to delete" }),
+});
+
+const GmailCreateLabelSchema = Type.Object({
+  action: Type.Literal("gmail_create_label"),
+  name: Type.String({ description: "Name for the new label" }),
+  label_list_visibility: Type.Optional(
+    Type.String({
+      description: "Visibility in label list: 'labelShow', 'labelShowIfUnread', or 'labelHide'",
+    }),
+  ),
+  message_list_visibility: Type.Optional(
+    Type.String({ description: "Visibility in message list: 'show' or 'hide'" }),
+  ),
+});
+
+const GmailDeleteLabelSchema = Type.Object({
+  action: Type.Literal("gmail_delete_label"),
+  label_id: Type.String({ description: "The label ID to delete (not the name)" }),
+});
+
+const GmailListLabelsSchema = Type.Object({
+  action: Type.Literal("gmail_list_labels"),
+});
+
 const CalendarListSchema = Type.Object({
   action: Type.Literal("calendar_list_events"),
   calendar_id: Type.Optional(Type.String({ description: "Calendar ID (default: 'primary')" })),
@@ -281,6 +338,13 @@ const GoogleWorkspaceSchema = Type.Union([
   GmailSendSchema,
   GmailTrashSchema,
   GmailModifyLabelsSchema,
+  GmailCreateDraftSchema,
+  GmailListDraftsSchema,
+  GmailUpdateDraftSchema,
+  GmailDeleteDraftSchema,
+  GmailCreateLabelSchema,
+  GmailDeleteLabelSchema,
+  GmailListLabelsSchema,
   CalendarListSchema,
   CalendarListCalendarsSchema,
   CalendarCreateEventSchema,
@@ -539,6 +603,239 @@ async function handleGmailModifyLabels(
     added: addLabels ?? [],
     removed: removeLabels ?? [],
   };
+}
+
+async function handleGmailCreateDraft(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const to = readStringParam(params, "to", { required: true });
+  const subject = readStringParam(params, "subject", { required: true });
+  const body = readStringParam(params, "body", { required: true });
+  const cc = readStringParam(params, "cc");
+  const bcc = readStringParam(params, "bcc");
+
+  const rawEmail = buildRawEmail({ to, subject, body, cc, bcc });
+  const encodedEmail = encodeBase64Url(rawEmail);
+
+  const url = `${GMAIL_API_BASE}/users/me/drafts`;
+  const accessToken = await getValidAccessToken(agentDir);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message: { raw: encodedEmail } }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create draft: ${errorText}`);
+  }
+
+  const result = (await response.json()) as {
+    id: string;
+    message: { id: string; threadId: string };
+  };
+
+  return {
+    success: true,
+    draft_id: result.id,
+    message_id: result.message.id,
+    thread_id: result.message.threadId,
+  };
+}
+
+async function handleGmailListDrafts(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const maxResults = readNumberParam(params, "max_results", { integer: true }) ?? 10;
+
+  const searchParams = new URLSearchParams();
+  searchParams.set("maxResults", String(maxResults));
+
+  const url = `${GMAIL_API_BASE}/users/me/drafts?${searchParams.toString()}`;
+  const response = await fetchWithAuth(url, agentDir);
+  const data = (await response.json()) as {
+    drafts?: Array<{ id: string; message: { id: string; threadId: string } }>;
+  };
+
+  if (!data.drafts?.length) {
+    return { drafts: [], count: 0 };
+  }
+
+  const drafts = await Promise.all(
+    data.drafts.slice(0, maxResults).map(async (draft) => {
+      const draftUrl = `${GMAIL_API_BASE}/users/me/drafts/${draft.id}?format=metadata&metadataHeaders=To&metadataHeaders=Subject`;
+      const draftResponse = await fetchWithAuth(draftUrl, agentDir);
+      const draftData = (await draftResponse.json()) as {
+        id: string;
+        message: GmailMessage;
+      };
+      return {
+        draft_id: draftData.id,
+        message_id: draftData.message.id,
+        to: extractHeader(draftData.message, "To"),
+        subject: extractHeader(draftData.message, "Subject"),
+        snippet: draftData.message.snippet,
+      };
+    }),
+  );
+
+  return { drafts, count: drafts.length };
+}
+
+async function handleGmailUpdateDraft(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const draftId = readStringParam(params, "draft_id", { required: true });
+  const to = readStringParam(params, "to", { required: true });
+  const subject = readStringParam(params, "subject", { required: true });
+  const body = readStringParam(params, "body", { required: true });
+  const cc = readStringParam(params, "cc");
+  const bcc = readStringParam(params, "bcc");
+
+  const rawEmail = buildRawEmail({ to, subject, body, cc, bcc });
+  const encodedEmail = encodeBase64Url(rawEmail);
+
+  const url = `${GMAIL_API_BASE}/users/me/drafts/${draftId}`;
+  const accessToken = await getValidAccessToken(agentDir);
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message: { raw: encodedEmail } }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update draft: ${errorText}`);
+  }
+
+  const result = (await response.json()) as {
+    id: string;
+    message: { id: string; threadId: string };
+  };
+
+  return {
+    success: true,
+    draft_id: result.id,
+    message_id: result.message.id,
+    thread_id: result.message.threadId,
+  };
+}
+
+async function handleGmailDeleteDraft(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const draftId = readStringParam(params, "draft_id", { required: true });
+
+  const url = `${GMAIL_API_BASE}/users/me/drafts/${draftId}`;
+  const accessToken = await getValidAccessToken(agentDir);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to delete draft: ${errorText}`);
+  }
+
+  return { success: true, draft_id: draftId, action: "deleted" };
+}
+
+async function handleGmailCreateLabel(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const name = readStringParam(params, "name", { required: true });
+  const labelListVisibility = readStringParam(params, "label_list_visibility") ?? "labelShow";
+  const messageListVisibility = readStringParam(params, "message_list_visibility") ?? "show";
+
+  const url = `${GMAIL_API_BASE}/users/me/labels`;
+  const accessToken = await getValidAccessToken(agentDir);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name,
+      labelListVisibility,
+      messageListVisibility,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create label: ${errorText}`);
+  }
+
+  const result = (await response.json()) as {
+    id: string;
+    name: string;
+    type: string;
+  };
+
+  return {
+    success: true,
+    label_id: result.id,
+    name: result.name,
+    type: result.type,
+  };
+}
+
+async function handleGmailDeleteLabel(
+  params: Record<string, unknown>,
+  agentDir?: string,
+): Promise<Record<string, unknown>> {
+  const labelId = readStringParam(params, "label_id", { required: true });
+
+  const url = `${GMAIL_API_BASE}/users/me/labels/${labelId}`;
+  const accessToken = await getValidAccessToken(agentDir);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to delete label: ${errorText}`);
+  }
+
+  return { success: true, label_id: labelId, action: "deleted" };
+}
+
+async function handleGmailListLabels(agentDir?: string): Promise<Record<string, unknown>> {
+  const url = `${GMAIL_API_BASE}/users/me/labels`;
+  const response = await fetchWithAuth(url, agentDir);
+  const data = (await response.json()) as {
+    labels?: Array<{
+      id: string;
+      name: string;
+      type: string;
+      messagesTotal?: number;
+      messagesUnread?: number;
+    }>;
+  };
+
+  const labels = (data.labels ?? []).map((label) => ({
+    id: label.id,
+    name: label.name,
+    type: label.type,
+    messagesTotal: label.messagesTotal,
+    messagesUnread: label.messagesUnread,
+  }));
+
+  return { labels, count: labels.length };
 }
 
 async function handleCalendarListEvents(
@@ -816,6 +1113,13 @@ export function createGoogleWorkspaceTool(options?: { agentDir?: string }): AnyA
 - gmail_send: Send a new email
 - gmail_trash: Move an email to trash
 - gmail_modify_labels: Add/remove labels (e.g., mark as read by removing UNREAD, star by adding STARRED)
+- gmail_create_draft: Create a new email draft
+- gmail_list_drafts: List existing email drafts
+- gmail_update_draft: Update an existing draft
+- gmail_delete_draft: Delete a draft
+- gmail_create_label: Create a new label
+- gmail_delete_label: Delete a label
+- gmail_list_labels: List all labels
 - calendar_list_events: List upcoming calendar events
 - calendar_list_calendars: List available calendars
 - calendar_create_event: Create a new calendar event
@@ -840,6 +1144,20 @@ export function createGoogleWorkspaceTool(options?: { agentDir?: string }): AnyA
             return jsonResult(await handleGmailTrash(params, agentDir));
           case "gmail_modify_labels":
             return jsonResult(await handleGmailModifyLabels(params, agentDir));
+          case "gmail_create_draft":
+            return jsonResult(await handleGmailCreateDraft(params, agentDir));
+          case "gmail_list_drafts":
+            return jsonResult(await handleGmailListDrafts(params, agentDir));
+          case "gmail_update_draft":
+            return jsonResult(await handleGmailUpdateDraft(params, agentDir));
+          case "gmail_delete_draft":
+            return jsonResult(await handleGmailDeleteDraft(params, agentDir));
+          case "gmail_create_label":
+            return jsonResult(await handleGmailCreateLabel(params, agentDir));
+          case "gmail_delete_label":
+            return jsonResult(await handleGmailDeleteLabel(params, agentDir));
+          case "gmail_list_labels":
+            return jsonResult(await handleGmailListLabels(agentDir));
           case "calendar_list_events":
             return jsonResult(await handleCalendarListEvents(params, agentDir));
           case "calendar_list_calendars":
@@ -857,7 +1175,7 @@ export function createGoogleWorkspaceTool(options?: { agentDir?: string }): AnyA
           default:
             return jsonResult({
               error: "invalid_action",
-              message: `Unknown action: ${action}. Valid actions: gmail_list, gmail_read, gmail_send, gmail_trash, gmail_modify_labels, calendar_list_events, calendar_list_calendars, calendar_create_event, calendar_delete_event, drive_list, drive_search, drive_read`,
+              message: `Unknown action: ${action}. Valid actions: gmail_list, gmail_read, gmail_send, gmail_trash, gmail_modify_labels, gmail_create_draft, gmail_list_drafts, gmail_update_draft, gmail_delete_draft, gmail_create_label, gmail_delete_label, gmail_list_labels, calendar_list_events, calendar_list_calendars, calendar_create_event, calendar_delete_event, drive_list, drive_search, drive_read`,
             });
         }
       } catch (err) {

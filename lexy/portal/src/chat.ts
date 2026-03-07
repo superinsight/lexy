@@ -58,10 +58,14 @@ function repairMojibake(text: string): string {
 }
 
 const SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
+const SILENT_PATTERNS = ["(no output)", "(no result)"];
 
 function isSilentToken(text: string): boolean {
   const trimmed = text.trim();
-  return SILENT_TOKENS.some((token) => trimmed === token);
+  if (SILENT_TOKENS.some((token) => trimmed === token)) {
+    return true;
+  }
+  return SILENT_PATTERNS.some((pat) => trimmed === pat);
 }
 
 function stripSilentTokens(text: string): string {

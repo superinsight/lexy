@@ -1,3 +1,4 @@
+import { marked } from "marked";
 import { createChatState, loadHistory, sendMessage, handleEvent } from "./chat";
 import { GatewayClient } from "./gateway";
 import {
@@ -11,6 +12,13 @@ import {
   attachSettingsHandlers,
   handleGoogleCallback,
 } from "./settings";
+
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(text: string): string {
+  const raw = marked.parse(text);
+  return typeof raw === "string" ? raw : "";
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,9 +52,85 @@ function generateSessionKey(): string {
   return `portal-${timestamp}-${random}`;
 }
 
-let currentSessionKey = new URL(window.location.href).searchParams.get("session") ?? "portal-admin";
+// --- Session list management ---
+type SessionEntry = {
+  key: string;
+  label: string;
+  createdAt: number;
+};
+
+const SESSIONS_STORAGE_KEY = "lexy_sessions";
+
+function loadSessions(): SessionEntry[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    return JSON.parse(raw) as SessionEntry[];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: SessionEntry[]): void {
+  localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+}
+
+function addSession(key: string, label?: string): SessionEntry {
+  const sessions = loadSessions();
+  const existing = sessions.find((s) => s.key === key);
+  if (existing) {
+    return existing;
+  }
+  const entry: SessionEntry = {
+    key,
+    label: label ?? formatSessionLabel(key),
+    createdAt: Date.now(),
+  };
+  sessions.unshift(entry);
+  saveSessions(sessions);
+  return entry;
+}
+
+function removeSession(key: string): void {
+  const sessions = loadSessions().filter((s) => s.key !== key);
+  saveSessions(sessions);
+}
+
+function renameSession(key: string, newLabel: string): void {
+  const sessions = loadSessions();
+  const entry = sessions.find((s) => s.key === key);
+  if (entry) {
+    entry.label = newLabel;
+    saveSessions(sessions);
+  }
+}
+
+function formatSessionLabel(key: string): string {
+  const match = key.match(/^portal-(\d+)/);
+  if (match) {
+    const date = new Date(Number(match[1]));
+    return date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  if (key === "portal-admin") {
+    return "Default Session";
+  }
+  return key;
+}
+
+const urlSessionKey = new URL(window.location.href).searchParams.get("session");
+let currentSessionKey = urlSessionKey ?? "portal-admin";
+addSession(currentSessionKey);
+
 let state = createChatState(currentSessionKey);
 const settingsState = createSettingsState();
+let sidebarOpen = localStorage.getItem("lexy_sidebar_open") !== "false";
 
 // Store gateway config for persistence and OAuth callback
 localStorage.setItem("gateway_url", gatewayUrl);
@@ -55,6 +139,100 @@ if (token) {
 }
 if (password) {
   localStorage.setItem("gateway_password", password);
+}
+
+const sidebarEl = $<HTMLElement>("sidebar");
+const sessionListEl = $<HTMLDivElement>("session-list");
+const sidebarToggleBtn = $<HTMLButtonElement>("sidebar-toggle");
+
+function renderSidebar() {
+  const sessions = loadSessions();
+  sidebarEl.classList.toggle("open", sidebarOpen);
+  document.getElementById("app")!.classList.toggle("sidebar-open", sidebarOpen);
+
+  sessionListEl.innerHTML = sessions
+    .map((s) => {
+      const active = s.key === currentSessionKey ? "active" : "";
+      const label = escapeHtml(s.label);
+      return `<div class="session-item ${active}" data-key="${escapeHtml(s.key)}">
+        <div class="session-item-content">
+          <span class="session-label">${label}</span>
+        </div>
+        <button class="session-delete" data-delete-key="${escapeHtml(s.key)}" title="Delete session">&times;</button>
+      </div>`;
+    })
+    .join("");
+
+  if (sessions.length === 0) {
+    sessionListEl.innerHTML = `<div class="session-empty">No sessions yet</div>`;
+  }
+}
+
+sessionListEl.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+
+  const deleteBtn = target.closest<HTMLElement>(".session-delete");
+  if (deleteBtn) {
+    e.stopPropagation();
+    const key = deleteBtn.dataset.deleteKey;
+    if (key && key !== currentSessionKey) {
+      removeSession(key);
+      renderSidebar();
+    }
+    return;
+  }
+
+  const item = target.closest<HTMLElement>(".session-item");
+  if (item?.dataset.key && item.dataset.key !== currentSessionKey) {
+    void switchToSession(item.dataset.key);
+  }
+});
+
+sessionListEl.addEventListener("dblclick", (e) => {
+  const item = (e.target as HTMLElement).closest<HTMLElement>(".session-item");
+  if (!item?.dataset.key) {
+    return;
+  }
+  const key = item.dataset.key;
+  const sessions = loadSessions();
+  const entry = sessions.find((s) => s.key === key);
+  if (!entry) {
+    return;
+  }
+  const newLabel = prompt("Rename session:", entry.label);
+  if (newLabel?.trim()) {
+    renameSession(key, newLabel.trim());
+    renderSidebar();
+  }
+});
+
+sidebarToggleBtn.addEventListener("click", () => {
+  sidebarOpen = !sidebarOpen;
+  localStorage.setItem("lexy_sidebar_open", String(sidebarOpen));
+  renderSidebar();
+});
+
+async function switchToSession(key: string) {
+  currentSessionKey = key;
+  state = createChatState(currentSessionKey);
+
+  const url = new URL(window.location.href);
+  if (key === "portal-admin") {
+    url.searchParams.delete("session");
+  } else {
+    url.searchParams.set("session", key);
+  }
+  window.history.pushState({}, "", url.toString());
+
+  renderSidebar();
+  renderMessages();
+
+  if (client.connected) {
+    await loadHistory(client, state);
+    renderMessages();
+  }
+
+  inputEl.focus();
 }
 
 function renderMessages() {
@@ -97,7 +275,8 @@ function renderMessages() {
         </div>`;
       }
 
-      const content = escapeHtml(msg.content);
+      const content =
+        msg.role === "assistant" ? renderMarkdown(msg.content) : escapeHtml(msg.content);
       const time = formatTimestamp(msg.timestamp);
       return `<div class="message ${roleClass} ${streamingClass}">
         <div class="message-content">${content}</div>
@@ -284,27 +463,23 @@ inputEl.addEventListener("input", () => {
 sendBtn.addEventListener("click", () => void handleSend());
 
 async function handleNewSession() {
-  // Generate a new session key
   currentSessionKey = generateSessionKey();
+  addSession(currentSessionKey);
 
-  // Update the URL without reloading
   const url = new URL(window.location.href);
   url.searchParams.set("session", currentSessionKey);
   window.history.pushState({}, "", url.toString());
 
-  // Reset state with new session key
   state = createChatState(currentSessionKey);
 
-  // Clear messages display
+  renderSidebar();
   renderMessages();
 
-  // If connected, reload history for new session (will be empty)
   if (client.connected) {
     await loadHistory(client, state);
     renderMessages();
   }
 
-  // Focus input for new conversation
   inputEl.focus();
 }
 
@@ -388,5 +563,6 @@ async function handleSaveModel(apiKey: string, model: string) {
 settingsBtn.addEventListener("click", openSettings);
 
 setStatus("Connecting...");
+renderSidebar();
 renderMessages();
 client.start();

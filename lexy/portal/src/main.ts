@@ -138,6 +138,37 @@ function setStatus(text: string, className: string = "") {
   statusEl.className = `status ${className}`;
 }
 
+const toastContainer = (() => {
+  const el = document.createElement("div");
+  el.className = "toast-container";
+  document.body.appendChild(el);
+  return el;
+})();
+
+function showToast(message: string, type: "success" | "error" = "success") {
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+
+  const icon =
+    type === "success"
+      ? `<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+      : `<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+
+  toast.innerHTML = `${icon}<span class="toast-message">${escapeHtml(message)}</span><button class="toast-dismiss">&times;</button>`;
+
+  toast.querySelector(".toast-dismiss")!.addEventListener("click", () => dismiss());
+
+  toastContainer.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("visible"));
+
+  function dismiss() {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 300);
+  }
+
+  setTimeout(dismiss, type === "error" ? 6000 : 4000);
+}
+
 function updateSendButton() {
   sendBtn.disabled = state.sending || !client.connected;
 }
@@ -175,19 +206,22 @@ const client = new GatewayClient({
   onConnected: async () => {
     // Handle pending OAuth callback first
     if (pendingOAuthError) {
-      alert(`Google auth failed: ${urlParams.get("error_description") || pendingOAuthError}`);
+      showToast(
+        `Google auth failed: ${urlParams.get("error_description") || pendingOAuthError}`,
+        "error",
+      );
       cleanOAuthParams();
     } else if (pendingOAuthCode && pendingOAuthState) {
       try {
         setStatus("Completing Google authentication...");
         const result = await handleGoogleCallback(client, pendingOAuthCode, pendingOAuthState);
         if (result.success) {
-          alert("Google account connected successfully!");
+          showToast("Google account connected successfully!");
         } else {
-          alert(`Failed to connect Google: ${result.error}`);
+          showToast(`Failed to connect Google: ${result.error}`, "error");
         }
       } catch (err) {
-        alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        showToast(`Error: ${err instanceof Error ? err.message : String(err)}`, "error");
       }
       cleanOAuthParams();
     }

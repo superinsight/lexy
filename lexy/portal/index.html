@@ -47,12 +47,14 @@
           </div>
           <div id="session-list" class="session-list"></div>
         </aside>
-        <main class="chat-container">
+        <main class="chat-container" id="chat-container">
           <div class="messages" id="messages"></div>
+          <div id="file-preview" class="file-preview"></div>
           <div class="input-area">
+            <input type="file" id="file-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.csv,.json,.xls,.xlsx" hidden />
             <textarea
               id="input"
-              placeholder="Type your message..."
+              placeholder="Type a message or drag & drop files here..."
               rows="1"
             ></textarea>
             <button id="send" type="button">Send</button>

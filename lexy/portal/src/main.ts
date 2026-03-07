@@ -1,5 +1,6 @@
 import { marked } from "marked";
-import { createChatState, loadHistory, sendMessage, handleEvent } from "./chat";
+import { createChatState, loadHistory, sendMessage, handleEvent, fileToAttachment } from "./chat";
+import type { ChatAttachment } from "./chat";
 import { GatewayClient } from "./gateway";
 import {
   createSettingsState,
@@ -13,11 +14,15 @@ import {
   handleGoogleCallback,
 } from "./settings";
 
-marked.setOptions({ breaks: true, gfm: true });
+marked.setOptions({ breaks: true, gfm: true, async: false });
 
 function renderMarkdown(text: string): string {
-  const raw = marked.parse(text);
-  return typeof raw === "string" ? raw : "";
+  try {
+    const raw = marked.parse(text, { async: false });
+    return raw || text;
+  } catch {
+    return text;
+  }
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -29,6 +34,11 @@ const sendBtn = $<HTMLButtonElement>("send");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
 const settingsBtn = $<HTMLButtonElement>("settings");
 const settingsContainerEl = $<HTMLDivElement>("settings-container");
+const chatContainerEl = $<HTMLElement>("chat-container");
+const filePreviewEl = $<HTMLDivElement>("file-preview");
+const fileInputEl = $<HTMLInputElement>("file-input");
+
+let pendingFiles: File[] = [];
 
 const urlParams = new URL(window.location.href).searchParams;
 
@@ -287,8 +297,7 @@ function renderMessages() {
         </div>`;
       }
 
-      const content =
-        msg.role === "assistant" ? renderMarkdown(msg.content) : escapeHtml(msg.content);
+      const content = msg.role === "user" ? escapeHtml(msg.content) : renderMarkdown(msg.content);
       const time = formatTimestamp(msg.timestamp);
       return `<div class="message ${roleClass} ${streamingClass}">
         <div class="message-content">${content}</div>
@@ -445,17 +454,118 @@ const client = new GatewayClient({
   },
 });
 
+// --- File attachment helpers ---
+
+const MAX_FILE_SIZE_MB = 50;
+
+function renderFilePreview() {
+  if (pendingFiles.length === 0) {
+    filePreviewEl.innerHTML = "";
+    filePreviewEl.style.display = "none";
+    return;
+  }
+  filePreviewEl.style.display = "flex";
+  filePreviewEl.innerHTML = pendingFiles
+    .map((f, i) => {
+      const isImage = f.type.startsWith("image/");
+      const thumb = isImage
+        ? `<img src="${URL.createObjectURL(f)}" alt="" class="file-chip-thumb" />`
+        : "";
+      const sizeKb = (f.size / 1024).toFixed(0);
+      const sizeLabel =
+        f.size >= 1024 * 1024 ? `${(f.size / 1024 / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
+      return `<div class="file-chip">
+        ${thumb}
+        <span class="file-chip-name">${escapeHtml(f.name)}</span>
+        <span class="file-chip-size">${sizeLabel}</span>
+        <button class="file-chip-remove" data-remove-index="${i}" title="Remove">&times;</button>
+      </div>`;
+    })
+    .join("");
+}
+
+function addFiles(files: FileList | File[]) {
+  for (const file of Array.from(files)) {
+    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      showToast(`${file.name} exceeds ${MAX_FILE_SIZE_MB} MB limit`, "error");
+      continue;
+    }
+    if (pendingFiles.some((f) => f.name === file.name && f.size === file.size)) {
+      continue;
+    }
+    pendingFiles.push(file);
+  }
+  renderFilePreview();
+}
+
+filePreviewEl.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLElement>(".file-chip-remove");
+  if (!btn) {
+    return;
+  }
+  const idx = Number(btn.dataset.removeIndex);
+  if (!Number.isNaN(idx) && idx >= 0 && idx < pendingFiles.length) {
+    pendingFiles.splice(idx, 1);
+    renderFilePreview();
+  }
+});
+
+fileInputEl.addEventListener("change", () => {
+  if (fileInputEl.files && fileInputEl.files.length > 0) {
+    addFiles(fileInputEl.files);
+    fileInputEl.value = "";
+  }
+});
+
+// Drag-and-drop on chat container
+chatContainerEl.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  chatContainerEl.classList.add("drag-over");
+});
+
+chatContainerEl.addEventListener("dragleave", (e) => {
+  if (!chatContainerEl.contains(e.relatedTarget as Node)) {
+    chatContainerEl.classList.remove("drag-over");
+  }
+});
+
+chatContainerEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  chatContainerEl.classList.remove("drag-over");
+  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+    addFiles(e.dataTransfer.files);
+  }
+});
+
+// --- Send handling ---
+
 async function handleSend() {
   const text = inputEl.value;
-  if (!text.trim()) {
+  const hasFiles = pendingFiles.length > 0;
+  if (!text.trim() && !hasFiles) {
     return;
+  }
+
+  let attachments: ChatAttachment[] | undefined;
+  if (hasFiles) {
+    try {
+      attachments = await Promise.all(pendingFiles.map(fileToAttachment));
+    } catch (err) {
+      showToast(
+        `Failed to read files: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+      return;
+    }
+    pendingFiles = [];
+    renderFilePreview();
   }
 
   inputEl.value = "";
   inputEl.style.height = "auto";
   renderMessages();
 
-  await sendMessage(client, state, text);
+  await sendMessage(client, state, text, attachments);
   renderMessages();
   updateSendButton();
 }

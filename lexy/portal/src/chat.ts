@@ -199,21 +199,49 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
   }
 }
 
+export type ChatAttachment = {
+  type: string;
+  mimeType: string;
+  fileName: string;
+  content: string;
+};
+
+export async function fileToAttachment(file: File): Promise<ChatAttachment> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(binary);
+  return {
+    type: file.type.startsWith("image/") ? "image" : "file",
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name,
+    content: base64,
+  };
+}
+
 export async function sendMessage(
   client: GatewayClient,
   state: ChatState,
   text: string,
+  attachments?: ChatAttachment[],
 ): Promise<void> {
   const trimmed = text.trim();
-  if (!trimmed || state.sending) {
+  const hasAttachments = attachments && attachments.length > 0;
+  if ((!trimmed && !hasAttachments) || state.sending) {
     return;
   }
 
   const runId = crypto.randomUUID();
 
+  const fileNames = hasAttachments ? attachments.map((a) => a.fileName).join(", ") : "";
+  const displayContent = trimmed + (fileNames ? `\n[Attached: ${fileNames}]` : "");
+
   state.messages.push({
     role: "user",
-    content: trimmed,
+    content: displayContent,
     timestamp: Date.now(),
   });
 
@@ -224,9 +252,10 @@ export async function sendMessage(
   try {
     await client.request("chat.send", {
       sessionKey: state.sessionKey,
-      message: trimmed,
+      message: trimmed || "(see attached files)",
       deliver: false,
       idempotencyKey: runId,
+      ...(hasAttachments ? { attachments } : {}),
     });
   } catch (err) {
     state.messages.push({

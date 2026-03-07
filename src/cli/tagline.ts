@@ -3,24 +3,22 @@ export type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
   newYear:
-    "New Year's Day: New year, new config—same old EADDRINUSE, but this time we resolve it like grown-ups.",
+    "New Year's Day: New year, fresh cases—may your dockets be manageable and your filings on time.",
   lunarNewYear:
-    "Lunar New Year: May your builds be lucky, your branches prosperous, and your merge conflicts chased away with fireworks.",
+    "Lunar New Year: May your cases prosper, your clients be happy, and your billable hours flow smoothly.",
   christmas:
-    "Christmas: Ho ho ho—Santa's little claw-sistant is here to ship joy, roll back chaos, and stash the keys safely.",
-  eid: "Eid al-Fitr: Celebration mode: queues cleared, tasks completed, and good vibes committed to main with clean history.",
-  diwali:
-    "Diwali: Let the logs sparkle and the bugs flee—today we light up the terminal and ship with pride.",
-  easter:
-    "Easter: I found your missing environment variable—consider it a tiny CLI egg hunt with fewer jellybeans.",
+    "Christmas: Ho ho ho—your legal assistant is here to help wrap up those year-end matters.",
+  eid: "Eid al-Fitr: Celebration mode: deadlines met, clients served, and peace of mind delivered.",
+  diwali: "Diwali: Let the victories shine bright—today we illuminate the path to justice.",
+  easter: "Easter: Found that missing document—consider it a small legal egg hunt victory.",
   hanukkah:
-    "Hanukkah: Eight nights, eight retries, zero shame—may your gateway stay lit and your deployments stay peaceful.",
+    "Hanukkah: Eight nights, eight wins—may your practice stay bright and your outcomes favorable.",
   halloween:
-    "Halloween: Spooky season: beware haunted dependencies, cursed caches, and the ghost of node_modules past.",
+    "Halloween: Spooky season: beware missed deadlines, lost documents, and the ghost of billable hours past.",
   thanksgiving:
-    "Thanksgiving: Grateful for stable ports, working DNS, and a bot that reads the logs so nobody has to.",
+    "Thanksgiving: Grateful for organized files, happy clients, and an assistant that never forgets a deadline.",
   valentines:
-    "Valentine's Day: Roses are typed, violets are piped—I'll automate the chores so you can spend time with humans.",
+    "Valentine's Day: Here to handle the paperwork so you can spend time with the people who matter.",
 } as const;
 
 const TAGLINES: string[] = [

@@ -643,7 +643,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled":
+    "Enable the web_search tool (default: false for HIPAA compliance; requires a provider API key).",
   "tools.web.search.provider":
     'Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
@@ -666,7 +667,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
-  "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
+  "tools.web.fetch.enabled": "Enable the web_fetch tool (default: false for HIPAA compliance).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",

@@ -44,7 +44,7 @@ export type BrowserConfig = {
   color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
-  /** Start Chrome headless (best-effort). Default: false */
+  /** Start Chrome headless (best-effort). Default: true */
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;

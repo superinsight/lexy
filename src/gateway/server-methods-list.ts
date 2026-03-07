@@ -94,6 +94,10 @@ const BASE_METHODS = [
   "agent.identity.get",
   "agent.wait",
   "browser.request",
+  // Integrations
+  "integrations.google.status",
+  "integrations.google.save",
+  "integrations.google.logout",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",

@@ -29,6 +29,21 @@ export function applyOnboardingLocalWorkspaceConfig(
     tools: {
       ...baseConfig.tools,
       profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
+      web: {
+        ...baseConfig.tools?.web,
+        search: {
+          ...baseConfig.tools?.web?.search,
+          enabled: baseConfig.tools?.web?.search?.enabled ?? false,
+        },
+        fetch: {
+          ...baseConfig.tools?.web?.fetch,
+          enabled: baseConfig.tools?.web?.fetch?.enabled ?? false,
+        },
+      },
+    },
+    browser: {
+      ...baseConfig.browser,
+      enabled: baseConfig.browser?.enabled ?? false,
     },
   };
 }

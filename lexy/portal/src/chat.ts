@@ -57,6 +57,21 @@ function repairMojibake(text: string): string {
     .replace(/\u00c3\u00b1/g, "\u00f1"); // n with tilde
 }
 
+const SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
+
+function isSilentToken(text: string): boolean {
+  const trimmed = text.trim();
+  return SILENT_TOKENS.some((token) => trimmed === token);
+}
+
+function stripSilentTokens(text: string): string {
+  let result = text;
+  for (const token of SILENT_TOKENS) {
+    result = result.replace(new RegExp(`\\b${token}\\b`, "g"), "");
+  }
+  return result.trim();
+}
+
 function cleanText(text: string): string {
   let cleaned = text;
 
@@ -74,6 +89,12 @@ function cleanText(text: string): string {
   // Remove JSON blocks (multiline)
   cleaned = cleaned.replace(/\{[\s\S]*?"results"[\s\S]*?\}\s*$/g, "");
   cleaned = cleaned.replace(/^\s*\{[\s\S]*?\}\s*$/g, "");
+
+  // Strip silent reply tokens (NO_REPLY, HEARTBEAT_OK)
+  if (isSilentToken(cleaned)) {
+    return "";
+  }
+  cleaned = stripSilentTokens(cleaned);
 
   return cleaned.trim();
 }
@@ -234,10 +255,13 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
       payload?.sessionKey === `agent:main:${state.sessionKey}`;
 
     if (payload?.stream === "assistant" && isOurSession && payload.data?.text) {
-      const text = payload.data.text;
+      const cleaned = cleanText(payload.data.text);
+      if (!cleaned) {
+        return false;
+      }
       const current = state.streaming ?? "";
-      if (!current || text.length >= current.length) {
-        state.streaming = text;
+      if (!current || cleaned.length >= current.length) {
+        state.streaming = cleaned;
       }
       return true;
     }
@@ -275,10 +299,11 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
 
   if (eventState === "delta") {
     const text = extractText(payload.message);
-    if (typeof text === "string") {
+    if (typeof text === "string" && !isSilentToken(text)) {
+      const stripped = stripSilentTokens(text);
       const current = state.streaming ?? "";
-      if (!current || text.length >= current.length) {
-        state.streaming = text;
+      if (!current || stripped.length >= current.length) {
+        state.streaming = stripped;
       }
     }
     return true;
@@ -287,10 +312,10 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
   if (eventState === "final") {
     const text = extractText(payload.message);
     const finalContent = text ?? state.streaming ?? "";
-    if (finalContent.trim()) {
+    if (finalContent.trim() && !isSilentToken(finalContent)) {
       state.messages.push({
         role: "assistant",
-        content: finalContent,
+        content: stripSilentTokens(finalContent),
         timestamp: Date.now(),
       });
     }

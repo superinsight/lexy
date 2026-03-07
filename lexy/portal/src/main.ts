@@ -3,6 +3,8 @@ import { GatewayClient } from "./gateway";
 import {
   createSettingsState,
   loadGoogleStatus,
+  loadModelConfig,
+  saveModelConfig,
   startGoogleAuth,
   disconnectGoogle,
   renderSettingsPanel,
@@ -308,7 +310,12 @@ async function handleNewSession() {
 
 newSessionBtn.addEventListener("click", () => void handleNewSession());
 
+let settingsAbort: AbortController | null = null;
+
 function renderSettings() {
+  settingsAbort?.abort();
+  settingsAbort = new AbortController();
+
   settingsContainerEl.innerHTML = renderSettingsPanel(
     settingsState,
     closeSettings,
@@ -320,12 +327,19 @@ function renderSettings() {
     closeSettings,
     handleConnectGoogle,
     handleDisconnectGoogle,
+    handleSaveModel,
+    (tab) => {
+      settingsState.activeTab = tab;
+      renderSettings();
+    },
+    settingsAbort.signal,
   );
 }
 
 function openSettings() {
   settingsState.visible = true;
   void loadGoogleStatus(client, settingsState).then(renderSettings);
+  void loadModelConfig(client, settingsState).then(renderSettings);
   renderSettings();
 }
 
@@ -342,6 +356,33 @@ async function handleDisconnectGoogle() {
   await disconnectGoogle(client);
   await loadGoogleStatus(client, settingsState);
   renderSettings();
+}
+
+async function handleSaveModel(apiKey: string, model: string) {
+  if (!apiKey && !settingsState.modelConfig?.hasApiKey) {
+    showToast("Please enter an API key", "error");
+    return;
+  }
+
+  const saveBtn = document.querySelector(".btn-save-model");
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving...";
+  }
+
+  const result = await saveModelConfig(client, apiKey, model);
+
+  if (result.success) {
+    showToast("Model settings saved. Reconnecting...");
+    await loadModelConfig(client, settingsState);
+    renderSettings();
+  } else {
+    showToast(`Failed to save: ${result.error}`, "error");
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+    }
+  }
 }
 
 settingsBtn.addEventListener("click", openSettings);

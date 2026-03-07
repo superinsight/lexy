@@ -8,6 +8,9 @@
     "dev": "vite",
     "preview": "vite preview"
   },
+  "dependencies": {
+    "marked": "^17.0.4"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vite": "^6.3.5"

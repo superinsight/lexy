@@ -57,6 +57,25 @@ function repairMojibake(text: string): string {
     .replace(/\u00c3\u00b1/g, "\u00f1"); // n with tilde
 }
 
+const SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
+const SILENT_PATTERNS = ["(no output)", "(no result)"];
+
+function isSilentToken(text: string): boolean {
+  const trimmed = text.trim();
+  if (SILENT_TOKENS.some((token) => trimmed === token)) {
+    return true;
+  }
+  return SILENT_PATTERNS.some((pat) => trimmed === pat);
+}
+
+function stripSilentTokens(text: string): string {
+  let result = text;
+  for (const token of SILENT_TOKENS) {
+    result = result.replace(new RegExp(`\\b${token}\\b`, "g"), "");
+  }
+  return result.trim();
+}
+
 function cleanText(text: string): string {
   let cleaned = text;
 
@@ -74,6 +93,12 @@ function cleanText(text: string): string {
   // Remove JSON blocks (multiline)
   cleaned = cleaned.replace(/\{[\s\S]*?"results"[\s\S]*?\}\s*$/g, "");
   cleaned = cleaned.replace(/^\s*\{[\s\S]*?\}\s*$/g, "");
+
+  // Strip silent reply tokens (NO_REPLY, HEARTBEAT_OK)
+  if (isSilentToken(cleaned)) {
+    return "";
+  }
+  cleaned = stripSilentTokens(cleaned);
 
   return cleaned.trim();
 }
@@ -174,21 +199,49 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
   }
 }
 
+export type ChatAttachment = {
+  type: string;
+  mimeType: string;
+  fileName: string;
+  content: string;
+};
+
+export async function fileToAttachment(file: File): Promise<ChatAttachment> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(binary);
+  return {
+    type: file.type.startsWith("image/") ? "image" : "file",
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name,
+    content: base64,
+  };
+}
+
 export async function sendMessage(
   client: GatewayClient,
   state: ChatState,
   text: string,
+  attachments?: ChatAttachment[],
 ): Promise<void> {
   const trimmed = text.trim();
-  if (!trimmed || state.sending) {
+  const hasAttachments = attachments && attachments.length > 0;
+  if ((!trimmed && !hasAttachments) || state.sending) {
     return;
   }
 
   const runId = crypto.randomUUID();
 
+  const fileNames = hasAttachments ? attachments.map((a) => a.fileName).join(", ") : "";
+  const displayContent = trimmed + (fileNames ? `\n[Attached: ${fileNames}]` : "");
+
   state.messages.push({
     role: "user",
-    content: trimmed,
+    content: displayContent,
     timestamp: Date.now(),
   });
 
@@ -199,9 +252,10 @@ export async function sendMessage(
   try {
     await client.request("chat.send", {
       sessionKey: state.sessionKey,
-      message: trimmed,
+      message: trimmed || "(see attached files)",
       deliver: false,
       idempotencyKey: runId,
+      ...(hasAttachments ? { attachments } : {}),
     });
   } catch (err) {
     state.messages.push({
@@ -234,10 +288,13 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
       payload?.sessionKey === `agent:main:${state.sessionKey}`;
 
     if (payload?.stream === "assistant" && isOurSession && payload.data?.text) {
-      const text = payload.data.text;
+      const cleaned = cleanText(payload.data.text);
+      if (!cleaned) {
+        return false;
+      }
       const current = state.streaming ?? "";
-      if (!current || text.length >= current.length) {
-        state.streaming = text;
+      if (!current || cleaned.length >= current.length) {
+        state.streaming = cleaned;
       }
       return true;
     }
@@ -275,10 +332,11 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
 
   if (eventState === "delta") {
     const text = extractText(payload.message);
-    if (typeof text === "string") {
+    if (typeof text === "string" && !isSilentToken(text)) {
+      const stripped = stripSilentTokens(text);
       const current = state.streaming ?? "";
-      if (!current || text.length >= current.length) {
-        state.streaming = text;
+      if (!current || stripped.length >= current.length) {
+        state.streaming = stripped;
       }
     }
     return true;
@@ -287,10 +345,10 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
   if (eventState === "final") {
     const text = extractText(payload.message);
     const finalContent = text ?? state.streaming ?? "";
-    if (finalContent.trim()) {
+    if (finalContent.trim() && !isSilentToken(finalContent)) {
       state.messages.push({
         role: "assistant",
-        content: finalContent,
+        content: stripSilentTokens(finalContent),
         timestamp: Date.now(),
       });
     }

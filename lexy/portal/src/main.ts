@@ -175,7 +175,19 @@ sessionListEl.addEventListener("click", (e) => {
   if (deleteBtn) {
     e.stopPropagation();
     const key = deleteBtn.dataset.deleteKey;
-    if (key && key !== currentSessionKey) {
+    if (!key) {
+      return;
+    }
+
+    if (key === currentSessionKey) {
+      const remaining = loadSessions().filter((s) => s.key !== key);
+      if (remaining.length === 0) {
+        showToast("Cannot delete the only session", "error");
+        return;
+      }
+      removeSession(key);
+      void switchToSession(remaining[0].key);
+    } else {
       removeSession(key);
       renderSidebar();
     }

@@ -1,5 +1,14 @@
 import { createChatState, loadHistory, sendMessage, handleEvent } from "./chat";
 import { GatewayClient } from "./gateway";
+import {
+  createSettingsState,
+  loadGoogleStatus,
+  startGoogleAuth,
+  disconnectGoogle,
+  renderSettingsPanel,
+  attachSettingsHandlers,
+  handleGoogleCallback,
+} from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -8,12 +17,24 @@ const messagesEl = $<HTMLDivElement>("messages");
 const inputEl = $<HTMLTextAreaElement>("input");
 const sendBtn = $<HTMLButtonElement>("send");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
+const settingsBtn = $<HTMLButtonElement>("settings");
+const settingsContainerEl = $<HTMLDivElement>("settings-container");
+
+const urlParams = new URL(window.location.href).searchParams;
+
+// Check for OAuth callback parameters
+const pendingOAuthCode = urlParams.get("code");
+const pendingOAuthState = urlParams.get("state");
+const pendingOAuthError = urlParams.get("error");
 
 const gatewayUrl =
-  new URL(window.location.href).searchParams.get("gateway") ??
+  urlParams.get("gateway") ??
+  localStorage.getItem("gateway_url") ??
   `ws://${window.location.hostname}:18789`;
-const token = new URL(window.location.href).searchParams.get("token") ?? undefined;
-const password = new URL(window.location.href).searchParams.get("password") ?? undefined;
+
+const token = urlParams.get("token") ?? localStorage.getItem("gateway_token") ?? undefined;
+
+const password = urlParams.get("password") ?? localStorage.getItem("gateway_password") ?? undefined;
 
 function generateSessionKey(): string {
   const timestamp = Date.now();
@@ -23,6 +44,16 @@ function generateSessionKey(): string {
 
 let currentSessionKey = new URL(window.location.href).searchParams.get("session") ?? "portal-admin";
 let state = createChatState(currentSessionKey);
+const settingsState = createSettingsState();
+
+// Store gateway config for persistence and OAuth callback
+localStorage.setItem("gateway_url", gatewayUrl);
+if (token) {
+  localStorage.setItem("gateway_token", token);
+}
+if (password) {
+  localStorage.setItem("gateway_password", password);
+}
 
 function renderMessages() {
   const allMessages: Array<{
@@ -65,7 +96,11 @@ function renderMessages() {
       }
 
       const content = escapeHtml(msg.content);
-      return `<div class="message ${roleClass} ${streamingClass}">${content}</div>`;
+      const time = formatTimestamp(msg.timestamp);
+      return `<div class="message ${roleClass} ${streamingClass}">
+        <div class="message-content">${content}</div>
+        <div class="message-time">${time}</div>
+      </div>`;
     })
     .join("");
 
@@ -76,6 +111,26 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  if (isToday) {
+    return timeStr;
+  }
+  if (isYesterday) {
+    return `Yesterday ${timeStr}`;
+  }
+  const dateStr = date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dateStr} ${timeStr}`;
 }
 
 function setStatus(text: string, className: string = "") {
@@ -100,11 +155,43 @@ async function pollForUpdates() {
   }
 }
 
+function cleanOAuthParams() {
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.searchParams.delete("code");
+  cleanUrl.searchParams.delete("state");
+  cleanUrl.searchParams.delete("scope");
+  cleanUrl.searchParams.delete("authuser");
+  cleanUrl.searchParams.delete("prompt");
+  cleanUrl.searchParams.delete("error");
+  cleanUrl.searchParams.delete("error_description");
+  cleanUrl.searchParams.delete("iss");
+  window.history.replaceState({}, "", cleanUrl.toString());
+}
+
 const client = new GatewayClient({
   url: gatewayUrl,
   token,
   password,
   onConnected: async () => {
+    // Handle pending OAuth callback first
+    if (pendingOAuthError) {
+      alert(`Google auth failed: ${urlParams.get("error_description") || pendingOAuthError}`);
+      cleanOAuthParams();
+    } else if (pendingOAuthCode && pendingOAuthState) {
+      try {
+        setStatus("Completing Google authentication...");
+        const result = await handleGoogleCallback(client, pendingOAuthCode, pendingOAuthState);
+        if (result.success) {
+          alert("Google account connected successfully!");
+        } else {
+          alert(`Failed to connect Google: ${result.error}`);
+        }
+      } catch (err) {
+        alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      cleanOAuthParams();
+    }
+
     setStatus("Connected", "connected");
     updateSendButton();
     await loadHistory(client, state);
@@ -186,6 +273,44 @@ async function handleNewSession() {
 }
 
 newSessionBtn.addEventListener("click", () => void handleNewSession());
+
+function renderSettings() {
+  settingsContainerEl.innerHTML = renderSettingsPanel(
+    settingsState,
+    closeSettings,
+    handleConnectGoogle,
+    handleDisconnectGoogle,
+  );
+  attachSettingsHandlers(
+    settingsContainerEl,
+    closeSettings,
+    handleConnectGoogle,
+    handleDisconnectGoogle,
+  );
+}
+
+function openSettings() {
+  settingsState.visible = true;
+  void loadGoogleStatus(client, settingsState).then(renderSettings);
+  renderSettings();
+}
+
+function closeSettings() {
+  settingsState.visible = false;
+  renderSettings();
+}
+
+function handleConnectGoogle() {
+  void startGoogleAuth();
+}
+
+async function handleDisconnectGoogle() {
+  await disconnectGoogle(client);
+  await loadGoogleStatus(client, settingsState);
+  renderSettings();
+}
+
+settingsBtn.addEventListener("click", openSettings);
 
 setStatus("Connecting...");
 renderMessages();

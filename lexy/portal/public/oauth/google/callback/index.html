@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connecting Google... | Lexy</title>
+    <link rel="icon" type="image/svg+xml" href="/public/favicon.svg" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: #1e293b;
+      }
+      .card {
+        background: white;
+        border-radius: 1rem;
+        padding: 2.5rem;
+        max-width: 400px;
+        width: 90%;
+        text-align: center;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      }
+      .icon { width: 64px; height: 64px; margin-bottom: 1.5rem; }
+      .icon.success { color: #10b981; }
+      .icon.error { color: #ef4444; }
+      .icon.loading { animation: spin 1s linear infinite; color: #6366f1; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      h1 { font-size: 1.5rem; margin-bottom: 0.75rem; font-weight: 600; }
+      p { color: #64748b; margin-bottom: 1.5rem; line-height: 1.6; }
+      .error-text { color: #ef4444; font-size: 0.875rem; background: #fef2f2; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; }
+      .btn {
+        display: inline-block;
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        color: white;
+        border: none;
+        border-radius: 0.5rem;
+        font-size: 1rem;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        transition: transform 0.15s;
+      }
+      .btn:hover { transform: translateY(-1px); }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="content">
+      <svg class="icon loading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-5.07l-2.83 2.83M8.76 15.24l-2.83 2.83m11.31 0l-2.83-2.83M8.76 8.76L5.93 5.93"/>
+      </svg>
+      <h1>Connecting Google...</h1>
+      <p>Please wait while we complete the authentication.</p>
+    </div>
+
+    <script type="module">
+      console.log("[Callback Page] Script starting...");
+      
+      // Global error handler to catch any uncaught errors
+      window.onerror = (msg, url, line, col, error) => {
+        console.error("[Callback Page] Global error:", { msg, url, line, col, error });
+        const el = document.getElementById("content");
+        if (el) {
+          el.innerHTML = `<div class="error-text">Script error: ${msg}</div><a href="/" class="btn">Back to Lexy</a>`;
+        }
+      };
+
+      let GatewayClient, handleGoogleCallback;
+      try {
+        const gatewayModule = await import("/src/gateway.ts");
+        const settingsModule = await import("/src/settings.ts");
+        GatewayClient = gatewayModule.GatewayClient;
+        handleGoogleCallback = settingsModule.handleGoogleCallback;
+        console.log("[Callback Page] Modules loaded successfully");
+      } catch (err) {
+        console.error("[Callback Page] Failed to load modules:", err);
+        document.getElementById("content").innerHTML = `
+          <div class="error-text">Failed to load modules: ${err.message}</div>
+          <a href="/" class="btn">Back to Lexy</a>
+        `;
+        throw err;
+      }
+
+      const contentEl = document.getElementById("content");
+
+      function showSuccess() {
+        contentEl.innerHTML = `
+          <svg class="icon success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          <h1>Connected!</h1>
+          <p>Your Google account has been connected successfully. You can now close this window.</p>
+          <a href="/" class="btn">Back to Lexy</a>
+        `;
+        setTimeout(() => { window.location.href = "/"; }, 2000);
+      }
+
+      function showError(message) {
+        contentEl.innerHTML = `
+          <svg class="icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <h1>Connection Failed</h1>
+          <div class="error-text">${message}</div>
+          <p>Please try again or check your configuration.</p>
+          <a href="/" class="btn">Back to Lexy</a>
+        `;
+      }
+
+      async function processCallback() {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get("code");
+        const state = params.get("state");
+        const error = params.get("error");
+
+        if (error) {
+          showError(params.get("error_description") || error);
+          return;
+        }
+
+        if (!code || !state) {
+          showError("Missing authorization code or state");
+          return;
+        }
+
+        const gatewayUrl =
+          localStorage.getItem("gateway_url") ||
+          `ws://${window.location.hostname}:18789`;
+        const token = localStorage.getItem("gateway_token");
+        const password = localStorage.getItem("gateway_password");
+
+        let timeoutId = null;
+        let completed = false;
+
+        const client = new GatewayClient({
+          url: gatewayUrl,
+          token: token || undefined,
+          password: password || undefined,
+          onConnected: async () => {
+            if (completed) return;
+            try {
+              console.log("[OAuth Callback] Connected to gateway, processing callback...");
+              const result = await handleGoogleCallback(client, code, state);
+              if (completed) return;
+              completed = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              if (result.success) {
+                console.log("[OAuth Callback] Success!");
+                showSuccess();
+              } else {
+                console.error("[OAuth Callback] Failed:", result.error);
+                showError(result.error || "Unknown error");
+              }
+            } catch (err) {
+              if (completed) return;
+              completed = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              console.error("[OAuth Callback] Exception:", err);
+              showError(err.message || String(err));
+            } finally {
+              client.stop();
+            }
+          },
+          onDisconnected: () => {
+            if (!completed) {
+              console.log("[OAuth Callback] Gateway disconnected");
+            }
+          },
+        });
+
+        console.log("[OAuth Callback] Connecting to gateway:", gatewayUrl);
+        client.start();
+
+        timeoutId = setTimeout(() => {
+          if (!completed) {
+            completed = true;
+            console.error("[OAuth Callback] Connection timeout");
+            showError("Connection timeout - please check your gateway configuration");
+          }
+        }, 30000);
+      }
+
+      processCallback();
+    </script>
+  </body>
+</html>

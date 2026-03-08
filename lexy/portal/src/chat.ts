@@ -72,9 +72,8 @@ const MODEL_ERROR_PATTERNS = [
 ];
 
 const FRIENDLY_MODEL_ERROR =
-  "It looks like your AI model isn't configured yet. " +
-  "Click the **\u2699 Settings** icon in the top-right corner, " +
-  "then select a model and enter your API key to get started.";
+  "The AI model isn't configured correctly. " +
+  "Please contact your administrator to check the API key settings.";
 
 function isModelConfigError(text: string): boolean {
   const lower = text.toLowerCase();

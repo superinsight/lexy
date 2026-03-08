@@ -38,6 +38,45 @@ cfg.gateway.controlUi.allowedOrigins = [
 fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
 "
 
+# ---------- 2b. Inject AI API key + default model if provided via env ----------
+node -e "
+const fs = require('fs');
+const cfgPath = '${CONFIG_FILE}';
+let cfg = {};
+try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch {}
+
+let changed = false;
+
+// Inject API keys from env into config.env
+const keyMap = {
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+};
+for (const [envName, val] of Object.entries(keyMap)) {
+  if (val) {
+    cfg.env = cfg.env || {};
+    cfg.env[envName] = val;
+    changed = true;
+    console.log('  Injected ' + envName);
+  }
+}
+
+// Inject default model (e.g. 'openai/gpt-5.4')
+const defaultModel = process.env.LEXY_DEFAULT_MODEL;
+if (defaultModel) {
+  cfg.agents = cfg.agents || {};
+  cfg.agents.defaults = cfg.agents.defaults || {};
+  cfg.agents.defaults.model = { primary: defaultModel };
+  changed = true;
+  console.log('  Set default model to ' + defaultModel);
+}
+
+if (changed) {
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+}
+"
+
 # ---------- 3. Inject token into the portal ----------
 # Always re-inject so the token stays current across container restarts.
 PORTAL_INDEX="/app/lexy/portal/dist/index.html"

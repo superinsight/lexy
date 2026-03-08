@@ -9,7 +9,6 @@ export type GoogleWorkspaceStatus = {
 export type ModelConfig = {
   provider: string;
   model: string;
-  hasApiKey: boolean;
 };
 
 const AVAILABLE_MODELS = [
@@ -35,12 +34,6 @@ const AVAILABLE_MODELS = [
   { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "google" },
   { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "google" },
 ];
-
-const PROVIDER_ENV_KEYS: Record<string, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  google: "GEMINI_API_KEY",
-};
 
 export type SettingsTab = "model" | "integrations";
 
@@ -260,12 +253,11 @@ export async function disconnectGoogle(client: GatewayClient): Promise<void> {
 // --- Model configuration ---
 
 export async function loadModelConfig(client: GatewayClient, state: SettingsState): Promise<void> {
-  const fallback: ModelConfig = { provider: "openai", model: "gpt-5.4", hasApiKey: false };
+  const fallback: ModelConfig = { provider: "openai", model: "gpt-5.4" };
   state.modelLoading = true;
   try {
     const res = await client.request<{
       config: {
-        env?: Record<string, string | undefined>;
         agents?: {
           defaults?: {
             model?: string | { primary?: string };
@@ -287,11 +279,7 @@ export async function loadModelConfig(client: GatewayClient, state: SettingsStat
     const provider = slashIdx > 0 ? primaryRef.slice(0, slashIdx) : "openai";
     const modelId = slashIdx > 0 ? primaryRef.slice(slashIdx + 1) : primaryRef;
 
-    const envKey = PROVIDER_ENV_KEYS[provider];
-    const envVal = envKey ? res.config?.env?.[envKey] : undefined;
-    const hasApiKey = typeof envVal === "string" && envVal.length > 0;
-
-    state.modelConfig = { provider, model: modelId, hasApiKey };
+    state.modelConfig = { provider, model: modelId };
   } catch {
     state.modelConfig = fallback;
   } finally {
@@ -301,7 +289,6 @@ export async function loadModelConfig(client: GatewayClient, state: SettingsStat
 
 export async function saveModelConfig(
   client: GatewayClient,
-  apiKey: string,
   model: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -311,7 +298,6 @@ export async function saveModelConfig(
     const selected = AVAILABLE_MODELS.find((m) => m.id === model);
     const provider = selected?.provider ?? "openai";
     const modelRef = `${provider}/${model}`;
-    const envKey = PROVIDER_ENV_KEYS[provider] ?? `${provider.toUpperCase()}_API_KEY`;
 
     const patch: Record<string, unknown> = {
       agents: {
@@ -320,10 +306,6 @@ export async function saveModelConfig(
         },
       },
     };
-
-    if (apiKey) {
-      patch.env = { [envKey]: apiKey };
-    }
 
     await client.request("config.patch", {
       baseHash,
@@ -426,17 +408,6 @@ export function renderSettingsPanel(
     : `
         <div class="model-form">
           <div class="model-field">
-            <label class="model-label" for="model-api-key">API Key</label>
-            <input
-              type="password"
-              id="model-api-key"
-              class="model-input"
-              placeholder="${state.modelConfig?.hasApiKey ? "••••••••••••••••  (key saved)" : "sk-..."}"
-              autocomplete="off"
-            />
-            <p class="model-hint">Your key is stored securely on the server and never exposed.</p>
-          </div>
-          <div class="model-field">
             <label class="model-label" for="model-select">Model</label>
             <select id="model-select" class="model-select">${modelOptions}</select>
           </div>
@@ -535,7 +506,7 @@ export function attachSettingsHandlers(
   onClose: () => void,
   onConnectGoogle: () => void,
   onDisconnectGoogle: () => void,
-  onSaveModel?: (apiKey: string, model: string) => void,
+  onSaveModel?: (model: string) => void,
   onTabChange?: (tab: SettingsTab) => void,
   signal?: AbortSignal,
 ): void {
@@ -562,10 +533,9 @@ export function attachSettingsHandlers(
           onDisconnectGoogle();
           break;
         case "save-model": {
-          const apiKeyInput = document.getElementById("model-api-key") as HTMLInputElement | null;
           const modelSelect = document.getElementById("model-select") as HTMLSelectElement | null;
-          if (apiKeyInput && modelSelect && onSaveModel) {
-            onSaveModel(apiKeyInput.value, modelSelect.value);
+          if (modelSelect && onSaveModel) {
+            onSaveModel(modelSelect.value);
           }
           break;
         }

@@ -12,6 +12,10 @@ services:
       PORTAL_PORT: "5174"
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-}"
       OPENCLAW_GATEWAY_PASSWORD: "${OPENCLAW_GATEWAY_PASSWORD:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      LEXY_DEFAULT_MODEL: "${LEXY_DEFAULT_MODEL:-}"
     volumes:
       - lexy-data:/home/node/.openclaw
     init: true

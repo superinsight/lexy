@@ -655,19 +655,14 @@ async function handleDisconnectGoogle() {
   renderSettings();
 }
 
-async function handleSaveModel(apiKey: string, model: string) {
-  if (!apiKey && !settingsState.modelConfig?.hasApiKey) {
-    showToast("Please enter an API key", "error");
-    return;
-  }
-
+async function handleSaveModel(model: string) {
   const saveBtn = document.querySelector(".btn-save-model");
   if (saveBtn) {
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving...";
   }
 
-  const result = await saveModelConfig(client, apiKey, model);
+  const result = await saveModelConfig(client, model);
 
   if (result.success) {
     showToast("Model settings saved. Reconnecting...");

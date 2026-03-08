@@ -57,6 +57,38 @@ function repairMojibake(text: string): string {
     .replace(/\u00c3\u00b1/g, "\u00f1"); // n with tilde
 }
 
+const MODEL_ERROR_PATTERNS = [
+  "no api key",
+  "api key not found",
+  "api key found for provider",
+  "auth-profiles",
+  "configure auth for this agent",
+  "missing api key",
+  "invalid api key",
+  "authentication failed",
+  "unauthorized",
+  "invalid_api_key",
+  "invalid x-api-key",
+];
+
+const FRIENDLY_MODEL_ERROR =
+  "It looks like your AI model isn't configured yet. " +
+  "Click the **\u2699 Settings** icon in the top-right corner, " +
+  "then select a model and enter your API key to get started.";
+
+function isModelConfigError(text: string): boolean {
+  const lower = text.toLowerCase();
+  return MODEL_ERROR_PATTERNS.some((p) => lower.includes(p));
+}
+
+const FRIENDLY_FILE_SIZE_ERROR =
+  "The file you attached is too large. The maximum file size is **50 MB**. " +
+  "Please reduce the file size and try again.";
+
+function isFileSizeError(text: string): boolean {
+  return text.includes("exceeds size limit");
+}
+
 const SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
 const SILENT_PATTERNS = ["(no output)", "(no result)"];
 
@@ -258,9 +290,16 @@ export async function sendMessage(
       ...(hasAttachments ? { attachments } : {}),
     });
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    let content = `Error: ${errMsg}`;
+    if (isFileSizeError(errMsg)) {
+      content = FRIENDLY_FILE_SIZE_ERROR;
+    } else if (isModelConfigError(errMsg)) {
+      content = FRIENDLY_MODEL_ERROR;
+    }
     state.messages.push({
       role: "assistant",
-      content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+      content,
       timestamp: Date.now(),
     });
     state.runId = null;
@@ -371,9 +410,16 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
   }
 
   if (eventState === "error") {
+    const errMsg = payload.errorMessage ?? "Unknown error";
+    let content = `Error: ${errMsg}`;
+    if (isFileSizeError(errMsg)) {
+      content = FRIENDLY_FILE_SIZE_ERROR;
+    } else if (isModelConfigError(errMsg)) {
+      content = FRIENDLY_MODEL_ERROR;
+    }
     state.messages.push({
       role: "assistant",
-      content: `Error: ${payload.errorMessage ?? "Unknown error"}`,
+      content,
       timestamp: Date.now(),
     });
     state.streaming = null;

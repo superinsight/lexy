@@ -275,7 +275,7 @@ function renderMessages() {
   if (allMessages.length === 0) {
     messagesEl.innerHTML = `
       <div class="empty-state">
-        <img src="/public/favicon.svg" alt="Lexy" class="empty-icon" />
+        <img src="/favicon.svg" alt="Lexy" class="empty-icon" />
         <p>Start a conversation with Lexy</p>
       </div>
     `;

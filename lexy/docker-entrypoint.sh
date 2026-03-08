@@ -77,6 +77,41 @@ if (changed) {
 }
 "
 
+# ---------- 2c. Proxy mode: route LLM calls through a remote proxy ----------
+if [ -n "${LEXY_PROXY_BASE_URL:-}" ]; then
+  echo "==> Configuring proxy mode (base URL: ${LEXY_PROXY_BASE_URL})"
+  node -e "
+const fs = require('fs');
+const cfgPath = '${CONFIG_FILE}';
+let cfg = {};
+try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch {}
+
+const proxyBase = process.env.LEXY_PROXY_BASE_URL.replace(/\/+$/, '');
+const proxyKey = process.env.LEXY_PROXY_API_KEY || '';
+
+cfg.models = cfg.models || {};
+cfg.models.providers = cfg.models.providers || {};
+
+const providerRoutes = {
+  openai:    { path: '/openai/v1',    api: 'openai-responses' },
+  anthropic: { path: '/anthropic/v1', api: 'anthropic-messages' },
+  google:    { path: '/gemini/v1',    api: 'google-generative-ai' },
+};
+
+for (const [provider, route] of Object.entries(providerRoutes)) {
+  const existing = cfg.models.providers[provider] || {};
+  cfg.models.providers[provider] = {
+    ...existing,
+    baseUrl: proxyBase + route.path,
+    ...(proxyKey ? { apiKey: proxyKey } : {}),
+  };
+  console.log('  Proxy ' + provider + ' -> ' + proxyBase + route.path);
+}
+
+fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+"
+fi
+
 # ---------- 3. Inject token into the portal ----------
 # Always re-inject so the token stays current across container restarts.
 PORTAL_INDEX="/app/lexy/portal/dist/index.html"

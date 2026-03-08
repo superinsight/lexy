@@ -16,6 +16,10 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       LEXY_DEFAULT_MODEL: "${LEXY_DEFAULT_MODEL:-}"
+      LEXY_PROXY_BASE_URL: "${LEXY_PROXY_BASE_URL:-}"
+      LEXY_PROXY_API_KEY: "${LEXY_PROXY_API_KEY:-}"
+      GOOGLE_OAUTH_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
+      GOOGLE_OAUTH_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
     volumes:
       - lexy-data:/home/node/.openclaw
     init: true

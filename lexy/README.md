@@ -139,6 +139,30 @@ LEXY_DEFAULT_MODEL=openai/gpt-5.4
 
 The entrypoint injects these into the gateway config on every container start. Users can still change the model via Settings if needed.
 
+#### Proxy mode (usage metering and billing)
+
+Instead of calling OpenAI/Anthropic/Gemini directly, you can route all LLM API calls through your own proxy server. This lets you track per-customer token usage, enforce quotas, and disable access when limits are exceeded.
+
+```env
+# Your proxy server URL
+LEXY_PROXY_BASE_URL=https://your-proxy.example.com
+
+# Per-customer API key that your proxy validates
+LEXY_PROXY_API_KEY=customer-abc-key-123
+```
+
+When `LEXY_PROXY_BASE_URL` is set, the entrypoint rewrites all provider base URLs:
+
+| Provider  | Proxied URL                          |
+| --------- | ------------------------------------ |
+| OpenAI    | `{LEXY_PROXY_BASE_URL}/openai/v1`    |
+| Anthropic | `{LEXY_PROXY_BASE_URL}/anthropic/v1` |
+| Google    | `{LEXY_PROXY_BASE_URL}/gemini/v1`    |
+
+The `LEXY_PROXY_API_KEY` is sent as the `Authorization: Bearer` header on every LLM request. Your proxy validates it, meters usage, and forwards to the real provider.
+
+See [`lexy/portal/SERVER.md`](portal/SERVER.md) for a complete guide on building the proxy service.
+
 To stop and clean up:
 
 ```bash
@@ -147,6 +171,55 @@ docker compose -f lexy/docker-compose.yml down
 # Also remove persisted data (resets saved model/API key settings)
 docker volume rm lexy_lexy-data
 ```
+
+## Notification API
+
+Lexy exposes an HTTP endpoint that lets external systems (cron jobs, webhooks, scripts) push messages directly into a chat session. Messages appear in real time in the portal.
+
+### Endpoint
+
+```
+POST http://<gateway-host>:<port>/api/notify
+Content-Type: application/json
+Authorization: Bearer <gateway-token>
+```
+
+### Request body
+
+| Field        | Type   | Required | Description                                       |
+| ------------ | ------ | -------- | ------------------------------------------------- |
+| `sessionKey` | string | No       | Target session key. Defaults to the main session. |
+| `message`    | string | Yes      | The notification text to display in the chat.     |
+| `label`      | string | No       | Optional label for the transcript entry.          |
+
+### Example: cron job reminder
+
+```bash
+curl -X POST http://localhost:19001/api/notify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"message": "Reminder: Filing deadline for Case #1234 is tomorrow."}'
+```
+
+### Example: target a specific session
+
+```bash
+curl -X POST http://localhost:19001/api/notify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "sessionKey": "portal-1709876543210-abc123",
+    "message": "New document uploaded to the Arthur Miller folder."
+  }'
+```
+
+### Response
+
+```json
+{ "ok": true, "messageId": "abc123" }
+```
+
+The portal tab title shows a badge (e.g. `(2) Lexy`) when messages arrive while the tab is in the background.
 
 ## Integrations
 

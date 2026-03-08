@@ -1,18 +1,20 @@
 import { marked } from "marked";
-import { createChatState, loadHistory, sendMessage, handleEvent, fileToAttachment } from "./chat";
-import type { ChatAttachment } from "./chat";
+import { createChatState, loadHistory, sendMessage, handleEvent, wsUrlToHttpUrl } from "./chat";
 import { GatewayClient } from "./gateway";
 import {
   createSettingsState,
   loadGoogleStatus,
   loadModelConfig,
+  loadUserProfileFromAgent,
   saveModelConfig,
+  saveUserProfile,
   startGoogleAuth,
   disconnectGoogle,
   renderSettingsPanel,
   attachSettingsHandlers,
   handleGoogleCallback,
 } from "./settings";
+import type { UserProfile } from "./settings";
 
 marked.setOptions({ breaks: true, gfm: true, async: false });
 
@@ -31,7 +33,7 @@ const statusEl = $<HTMLDivElement>("status");
 const messagesEl = $<HTMLDivElement>("messages");
 const inputEl = $<HTMLTextAreaElement>("input");
 const sendBtn = $<HTMLButtonElement>("send");
-const newSessionBtn = $<HTMLButtonElement>("new-session");
+const newConversationBtn = $<HTMLButtonElement>("new-conversation");
 const settingsBtn = $<HTMLButtonElement>("settings");
 const settingsContainerEl = $<HTMLDivElement>("settings-container");
 const chatContainerEl = $<HTMLElement>("chat-container");
@@ -39,6 +41,21 @@ const filePreviewEl = $<HTMLDivElement>("file-preview");
 const fileInputEl = $<HTMLInputElement>("file-input");
 
 let pendingFiles: File[] = [];
+
+// Tab title notification badge for new messages while tab is not focused
+const BASE_TITLE = document.title;
+let unreadCount = 0;
+
+function updateTitleBadge() {
+  document.title = unreadCount > 0 ? `(${unreadCount}) ${BASE_TITLE}` : BASE_TITLE;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    unreadCount = 0;
+    updateTitleBadge();
+  }
+});
 
 const urlParams = new URL(window.location.href).searchParams;
 
@@ -56,68 +73,68 @@ const token = urlParams.get("token") ?? localStorage.getItem("gateway_token") ??
 
 const password = urlParams.get("password") ?? localStorage.getItem("gateway_password") ?? undefined;
 
-function generateSessionKey(): string {
+function generateConversationKey(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `portal-${timestamp}-${random}`;
 }
 
-// --- Session list management ---
-type SessionEntry = {
+// --- Conversation list management ---
+type ConversationEntry = {
   key: string;
   label: string;
   createdAt: number;
 };
 
-const SESSIONS_STORAGE_KEY = "lexy_sessions";
+const CONVERSATIONS_STORAGE_KEY = "lexy_sessions";
 
-function loadSessions(): SessionEntry[] {
+function loadConversations(): ConversationEntry[] {
   try {
-    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    const raw = localStorage.getItem(CONVERSATIONS_STORAGE_KEY);
     if (!raw) {
       return [];
     }
-    return JSON.parse(raw) as SessionEntry[];
+    return JSON.parse(raw) as ConversationEntry[];
   } catch {
     return [];
   }
 }
 
-function saveSessions(sessions: SessionEntry[]): void {
-  localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+function saveConversations(conversations: ConversationEntry[]): void {
+  localStorage.setItem(CONVERSATIONS_STORAGE_KEY, JSON.stringify(conversations));
 }
 
-function addSession(key: string, label?: string): SessionEntry {
-  const sessions = loadSessions();
-  const existing = sessions.find((s) => s.key === key);
+function addConversation(key: string, label?: string): ConversationEntry {
+  const conversations = loadConversations();
+  const existing = conversations.find((s) => s.key === key);
   if (existing) {
     return existing;
   }
-  const entry: SessionEntry = {
+  const entry: ConversationEntry = {
     key,
-    label: label ?? formatSessionLabel(key),
+    label: label ?? formatConversationLabel(key),
     createdAt: Date.now(),
   };
-  sessions.unshift(entry);
-  saveSessions(sessions);
+  conversations.unshift(entry);
+  saveConversations(conversations);
   return entry;
 }
 
-function removeSession(key: string): void {
-  const sessions = loadSessions().filter((s) => s.key !== key);
-  saveSessions(sessions);
+function removeConversation(key: string): void {
+  const conversations = loadConversations().filter((s) => s.key !== key);
+  saveConversations(conversations);
 }
 
-function renameSession(key: string, newLabel: string): void {
-  const sessions = loadSessions();
-  const entry = sessions.find((s) => s.key === key);
+function renameConversation(key: string, newLabel: string): void {
+  const conversations = loadConversations();
+  const entry = conversations.find((s) => s.key === key);
   if (entry) {
     entry.label = newLabel;
-    saveSessions(sessions);
+    saveConversations(conversations);
   }
 }
 
-function formatSessionLabel(key: string): string {
+function formatConversationLabel(key: string): string {
   const match = key.match(/^portal-(\d+)/);
   if (match) {
     const date = new Date(Number(match[1]));
@@ -129,16 +146,27 @@ function formatSessionLabel(key: string): string {
     });
   }
   if (key === "portal-admin") {
-    return "Default Session";
+    return "Default Conversation";
   }
   return key;
 }
 
-const urlSessionKey = new URL(window.location.href).searchParams.get("session");
-let currentSessionKey = urlSessionKey ?? "portal-admin";
-addSession(currentSessionKey);
+const urlConversationKey = new URL(window.location.href).searchParams.get("session");
+let currentConversationKey: string;
+if (urlConversationKey) {
+  currentConversationKey = urlConversationKey;
+} else {
+  const existing = loadConversations();
+  currentConversationKey = existing.length > 0 ? existing[0].key : generateConversationKey();
+}
+addConversation(currentConversationKey);
+if (!urlConversationKey && currentConversationKey !== "portal-admin") {
+  const initUrl = new URL(window.location.href);
+  initUrl.searchParams.set("session", currentConversationKey);
+  window.history.replaceState({}, "", initUrl.toString());
+}
 
-let state = createChatState(currentSessionKey);
+let state = createChatState(currentConversationKey);
 const settingsState = createSettingsState();
 let sidebarOpen = localStorage.getItem("lexy_sidebar_open") !== "false";
 
@@ -152,36 +180,36 @@ if (password) {
 }
 
 const sidebarEl = $<HTMLElement>("sidebar");
-const sessionListEl = $<HTMLDivElement>("session-list");
+const conversationListEl = $<HTMLDivElement>("conversation-list");
 const sidebarToggleBtn = $<HTMLButtonElement>("sidebar-toggle");
 
 function renderSidebar() {
-  const sessions = loadSessions();
+  const conversations = loadConversations();
   sidebarEl.classList.toggle("open", sidebarOpen);
   document.getElementById("app")!.classList.toggle("sidebar-open", sidebarOpen);
 
-  sessionListEl.innerHTML = sessions
+  conversationListEl.innerHTML = conversations
     .map((s) => {
-      const active = s.key === currentSessionKey ? "active" : "";
+      const active = s.key === currentConversationKey ? "active" : "";
       const label = escapeHtml(s.label);
-      return `<div class="session-item ${active}" data-key="${escapeHtml(s.key)}">
-        <div class="session-item-content">
-          <span class="session-label">${label}</span>
+      return `<div class="conversation-item ${active}" data-key="${escapeHtml(s.key)}">
+        <div class="conversation-item-content">
+          <span class="conversation-label">${label}</span>
         </div>
-        <button class="session-delete" data-delete-key="${escapeHtml(s.key)}" title="Delete session">&times;</button>
+        <button class="conversation-delete" data-delete-key="${escapeHtml(s.key)}" title="Delete conversation">&times;</button>
       </div>`;
     })
     .join("");
 
-  if (sessions.length === 0) {
-    sessionListEl.innerHTML = `<div class="session-empty">No sessions yet</div>`;
+  if (conversations.length === 0) {
+    conversationListEl.innerHTML = `<div class="conversation-empty">No conversations yet</div>`;
   }
 }
 
-sessionListEl.addEventListener("click", (e) => {
+conversationListEl.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
 
-  const deleteBtn = target.closest<HTMLElement>(".session-delete");
+  const deleteBtn = target.closest<HTMLElement>(".conversation-delete");
   if (deleteBtn) {
     e.stopPropagation();
     const key = deleteBtn.dataset.deleteKey;
@@ -189,41 +217,41 @@ sessionListEl.addEventListener("click", (e) => {
       return;
     }
 
-    if (key === currentSessionKey) {
-      const remaining = loadSessions().filter((s) => s.key !== key);
+    if (key === currentConversationKey) {
+      const remaining = loadConversations().filter((s) => s.key !== key);
       if (remaining.length === 0) {
-        showToast("Cannot delete the only session", "error");
+        showToast("Cannot delete the only conversation", "error");
         return;
       }
-      removeSession(key);
-      void switchToSession(remaining[0].key);
+      removeConversation(key);
+      void switchToConversation(remaining[0].key);
     } else {
-      removeSession(key);
+      removeConversation(key);
       renderSidebar();
     }
     return;
   }
 
-  const item = target.closest<HTMLElement>(".session-item");
-  if (item?.dataset.key && item.dataset.key !== currentSessionKey) {
-    void switchToSession(item.dataset.key);
+  const item = target.closest<HTMLElement>(".conversation-item");
+  if (item?.dataset.key && item.dataset.key !== currentConversationKey) {
+    void switchToConversation(item.dataset.key);
   }
 });
 
-sessionListEl.addEventListener("dblclick", (e) => {
-  const item = (e.target as HTMLElement).closest<HTMLElement>(".session-item");
+conversationListEl.addEventListener("dblclick", (e) => {
+  const item = (e.target as HTMLElement).closest<HTMLElement>(".conversation-item");
   if (!item?.dataset.key) {
     return;
   }
   const key = item.dataset.key;
-  const sessions = loadSessions();
-  const entry = sessions.find((s) => s.key === key);
+  const conversations = loadConversations();
+  const entry = conversations.find((s) => s.key === key);
   if (!entry) {
     return;
   }
-  const newLabel = prompt("Rename session:", entry.label);
+  const newLabel = prompt("Rename conversation:", entry.label);
   if (newLabel?.trim()) {
-    renameSession(key, newLabel.trim());
+    renameConversation(key, newLabel.trim());
     renderSidebar();
   }
 });
@@ -234,9 +262,9 @@ sidebarToggleBtn.addEventListener("click", () => {
   renderSidebar();
 });
 
-async function switchToSession(key: string) {
-  currentSessionKey = key;
-  state = createChatState(currentSessionKey);
+async function switchToConversation(key: string) {
+  currentConversationKey = key;
+  state = createChatState(currentConversationKey);
 
   const url = new URL(window.location.href);
   if (key === "portal-admin") {
@@ -261,12 +289,23 @@ function renderMessages() {
   const allMessages: Array<{
     role: string;
     content: string;
+    timestamp?: number;
     isStreaming?: boolean;
     isThinking?: boolean;
+    isProcessing?: boolean;
+    processingLabel?: string;
+    isSystem?: boolean;
   }> = [...state.messages];
 
-  // Show typing indicator when waiting for response
-  if (state.runId !== null && (state.streaming === null || state.streaming === "")) {
+  // Show processing indicator while attachments are being extracted
+  if (state.processingStatus) {
+    allMessages.push({
+      role: "assistant",
+      content: "",
+      isProcessing: true,
+      processingLabel: state.processingStatus,
+    });
+  } else if (state.runId !== null && (state.streaming === null || state.streaming === "")) {
     allMessages.push({ role: "assistant", content: "", isThinking: true });
   } else if (state.streaming !== null && state.streaming !== "") {
     allMessages.push({ role: "assistant", content: state.streaming, isStreaming: true });
@@ -287,6 +326,32 @@ function renderMessages() {
       const roleClass = msg.role === "user" ? "user" : "assistant";
       const streamingClass = msg.isStreaming ? "streaming" : "";
 
+      if (msg.isSystem) {
+        const sysContent =
+          msg.role === "user" ? escapeHtml(msg.content) : renderMarkdown(msg.content);
+        const sysTime = msg.timestamp ? formatTimestamp(msg.timestamp) : "";
+        const sysTimeHtml = sysTime ? `<span class="system-time">${sysTime}</span>` : "";
+        return `<div class="message system-message collapsed">
+          <div class="system-message-header">
+            <span class="system-toggle-icon">&#9654;</span>
+            <span class="system-label">System message</span>
+            ${sysTimeHtml}
+          </div>
+          <div class="system-message-body">
+            <div class="message-content">${sysContent}</div>
+          </div>
+        </div>`;
+      }
+
+      if (msg.isProcessing) {
+        return `<div class="message assistant processing">
+          <div class="processing-indicator">
+            <div class="processing-spinner"></div>
+            <span>${msg.processingLabel}</span>
+          </div>
+        </div>`;
+      }
+
       if (msg.isThinking) {
         return `<div class="message assistant thinking">
           <div class="typing-indicator">
@@ -298,13 +363,20 @@ function renderMessages() {
       }
 
       const content = msg.role === "user" ? escapeHtml(msg.content) : renderMarkdown(msg.content);
-      const time = formatTimestamp(msg.timestamp);
+      const time = msg.isStreaming || msg.timestamp == null ? "" : formatTimestamp(msg.timestamp);
+      const timeHtml = time ? `<div class="message-time">${time}</div>` : "";
       return `<div class="message ${roleClass} ${streamingClass}">
         <div class="message-content">${content}</div>
-        <div class="message-time">${time}</div>
+        ${timeHtml}
       </div>`;
     })
     .join("");
+
+  for (const header of messagesEl.querySelectorAll(".system-message-header")) {
+    header.addEventListener("click", () => {
+      header.parentElement?.classList.toggle("collapsed");
+    });
+  }
 
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -450,6 +522,12 @@ const client = new GatewayClient({
     const handled = handleEvent(state, evt);
     if (handled) {
       renderMessages();
+      // Badge the tab title when a final message arrives while tab is hidden
+      const payload = evt.payload as { state?: string } | undefined;
+      if (document.hidden && payload?.state === "final") {
+        unreadCount++;
+        updateTitleBadge();
+      }
     }
   },
 });
@@ -546,17 +624,8 @@ async function handleSend() {
     return;
   }
 
-  let attachments: ChatAttachment[] | undefined;
+  const files = hasFiles ? [...pendingFiles] : undefined;
   if (hasFiles) {
-    try {
-      attachments = await Promise.all(pendingFiles.map(fileToAttachment));
-    } catch (err) {
-      showToast(
-        `Failed to read files: ${err instanceof Error ? err.message : String(err)}`,
-        "error",
-      );
-      return;
-    }
     pendingFiles = [];
     renderFilePreview();
   }
@@ -565,7 +634,15 @@ async function handleSend() {
   inputEl.style.height = "auto";
   renderMessages();
 
-  await sendMessage(client, state, text, attachments);
+  const httpBaseUrl = wsUrlToHttpUrl(gatewayUrl);
+  const authToken = token ?? password;
+
+  await sendMessage(client, state, text, {
+    files,
+    httpBaseUrl,
+    authToken,
+    onStateChange: renderMessages,
+  });
   renderMessages();
   updateSendButton();
 }
@@ -584,15 +661,15 @@ inputEl.addEventListener("input", () => {
 
 sendBtn.addEventListener("click", () => void handleSend());
 
-async function handleNewSession() {
-  currentSessionKey = generateSessionKey();
-  addSession(currentSessionKey);
+async function handleNewConversation() {
+  currentConversationKey = generateConversationKey();
+  addConversation(currentConversationKey);
 
   const url = new URL(window.location.href);
-  url.searchParams.set("session", currentSessionKey);
+  url.searchParams.set("session", currentConversationKey);
   window.history.pushState({}, "", url.toString());
 
-  state = createChatState(currentSessionKey);
+  state = createChatState(currentConversationKey);
 
   renderSidebar();
   renderMessages();
@@ -605,7 +682,7 @@ async function handleNewSession() {
   inputEl.focus();
 }
 
-newSessionBtn.addEventListener("click", () => void handleNewSession());
+newConversationBtn.addEventListener("click", () => void handleNewConversation());
 
 let settingsAbort: AbortController | null = null;
 
@@ -630,6 +707,7 @@ function renderSettings() {
       renderSettings();
     },
     settingsAbort.signal,
+    handleSaveProfile,
   );
 }
 
@@ -637,6 +715,7 @@ function openSettings() {
   settingsState.visible = true;
   void loadGoogleStatus(client, settingsState).then(renderSettings);
   void loadModelConfig(client, settingsState).then(renderSettings);
+  void loadUserProfileFromAgent(client, settingsState).then(renderSettings);
   renderSettings();
 }
 
@@ -673,6 +752,28 @@ async function handleSaveModel(model: string) {
     if (saveBtn) {
       saveBtn.disabled = false;
       saveBtn.textContent = "Save";
+    }
+  }
+}
+
+async function handleSaveProfile(profile: UserProfile) {
+  const saveBtn = document.querySelector(".btn-save-profile");
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving...";
+  }
+
+  settingsState.userProfile = profile;
+  const result = await saveUserProfile(client, profile);
+
+  if (result.success) {
+    showToast("Profile saved");
+    renderSettings();
+  } else {
+    showToast(`Failed to save profile: ${result.error}`, "error");
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save Profile";
     }
   }
 }

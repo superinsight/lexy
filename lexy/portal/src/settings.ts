@@ -35,7 +35,12 @@ const AVAILABLE_MODELS = [
   { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "google" },
 ];
 
-export type SettingsTab = "model" | "integrations";
+export type UserProfile = {
+  firmName: string;
+  contactName: string;
+};
+
+export type SettingsTab = "profile" | "model" | "integrations";
 
 export type SettingsState = {
   visible: boolean;
@@ -44,6 +49,7 @@ export type SettingsState = {
   modelConfig: ModelConfig | null;
   modelLoading: boolean;
   loading: boolean;
+  userProfile: UserProfile;
 };
 
 const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -62,14 +68,116 @@ const SCOPES = [
   "https://www.googleapis.com/auth/drive.file",
 ];
 
+const USER_PROFILE_KEY = "lexy_user_profile";
+
+function loadUserProfile(): UserProfile {
+  try {
+    const raw = localStorage.getItem(USER_PROFILE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<UserProfile>;
+      return {
+        firmName: parsed.firmName ?? "",
+        contactName: parsed.contactName ?? "",
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { firmName: "", contactName: "" };
+}
+
+function saveUserProfileLocal(profile: UserProfile): void {
+  localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
+}
+
+export async function loadUserProfileFromAgent(
+  client: GatewayClient,
+  state: SettingsState,
+): Promise<void> {
+  try {
+    const res = await client.request<{ content?: string }>("agents.files.get", {
+      agentId: "main",
+      name: "USER.md",
+    });
+    if (res.content) {
+      const nameMatch = res.content.match(/\*\*Name:\*\*\s*(.+)/);
+      const firmMatch = res.content.match(/\*\*Firm\/Organization:\*\*\s*(.+)/);
+      const name = nameMatch?.[1]?.trim();
+      const firm = firmMatch?.[1]?.trim();
+      if (name) {
+        state.userProfile.contactName = name;
+      }
+      if (firm) {
+        state.userProfile.firmName = firm;
+      }
+      saveUserProfileLocal(state.userProfile);
+    }
+  } catch {
+    /* file may not exist yet */
+  }
+}
+
+function patchUserMdField(content: string, field: string, value: string): string {
+  const pattern = new RegExp(`(\\*\\*${field}:\\*\\*)(.*)`);
+  if (pattern.test(content)) {
+    return content.replace(pattern, `$1 ${value}`);
+  }
+  return content;
+}
+
+export async function saveUserProfile(
+  client: GatewayClient,
+  profile: UserProfile,
+): Promise<{ success: boolean; error?: string }> {
+  saveUserProfileLocal(profile);
+  try {
+    let content: string;
+    try {
+      const res = await client.request<{ content?: string }>("agents.files.get", {
+        agentId: "main",
+        name: "USER.md",
+      });
+      content = res.content ?? "";
+    } catch {
+      content = "";
+    }
+
+    if (content) {
+      content = patchUserMdField(content, "Name", profile.contactName);
+      content = patchUserMdField(content, "Firm/Organization", profile.firmName);
+    } else {
+      content = [
+        "# USER.md - About the Attorney",
+        "",
+        `- **Name:** ${profile.contactName}`,
+        `- **Firm/Organization:** ${profile.firmName}`,
+        "",
+      ].join("\n");
+    }
+
+    await client.request("agents.files.set", {
+      agentId: "main",
+      name: "USER.md",
+      content,
+    });
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export function createSettingsState(): SettingsState {
   return {
     visible: false,
-    activeTab: "model",
+    activeTab: "profile",
     googleStatus: null,
     modelConfig: null,
     modelLoading: false,
     loading: false,
+    userProfile: loadUserProfile(),
   };
 }
 
@@ -418,10 +526,52 @@ export function renderSettingsPanel(
         </div>
       `;
 
-  const isModelTab = state.activeTab === "model";
+  const activeTab = state.activeTab;
+
+  const profileTabContent = `
+    <div class="settings-tab-content ${activeTab === "profile" ? "active" : ""}">
+      <div class="integration-card">
+        <div class="integration-header">
+          <div class="integration-info">
+            <h4>Your Profile</h4>
+            <p>Information used when Lexy communicates on your behalf</p>
+          </div>
+        </div>
+        <div class="profile-form">
+          <div class="profile-field">
+            <label class="profile-label" for="profile-contact-name">Contact Name</label>
+            <input type="text" id="profile-contact-name" class="profile-input" placeholder="e.g. Jane Smith, Esq." value="${escapeHtml(state.userProfile.contactName)}" />
+          </div>
+          <div class="profile-field">
+            <label class="profile-label" for="profile-firm-name">Firm / Organization</label>
+            <input type="text" id="profile-firm-name" class="profile-input" placeholder="e.g. Smith & Associates LLP" value="${escapeHtml(state.userProfile.firmName)}" />
+          </div>
+          <button class="btn-save-profile" data-action="save-profile">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Profile
+          </button>
+        </div>
+      </div>
+      <div class="ai-disclosure-card">
+        <div class="ai-disclosure-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+        </div>
+        <div class="ai-disclosure-content">
+          <h4>AI Transparency Notice</h4>
+          <p>When Lexy sends emails or communicates with others on your behalf, every message will be signed:</p>
+          <p class="ai-disclosure-signature"><em>Lexy — AI Legal Assistant<br/>On behalf of ${escapeHtml(state.userProfile.contactName || "[Your Name]")}${state.userProfile.firmName ? `, ${escapeHtml(state.userProfile.firmName)}` : ""}</em></p>
+          <p class="ai-disclosure-sub">We believe in honesty and transparency. Recipients will always know they are interacting with an AI assistant acting on your behalf.</p>
+        </div>
+      </div>
+    </div>
+  `;
 
   const modelTabContent = `
-    <div class="settings-tab-content ${isModelTab ? "active" : ""}">
+    <div class="settings-tab-content ${activeTab === "model" ? "active" : ""}">
       <div class="integration-card">
         <div class="integration-header">
           <div class="integration-icon model">
@@ -442,7 +592,7 @@ export function renderSettingsPanel(
   `;
 
   const integrationsTabContent = `
-    <div class="settings-tab-content ${!isModelTab ? "active" : ""}">
+    <div class="settings-tab-content ${activeTab === "integrations" ? "active" : ""}">
       <div class="integration-card">
         <div class="integration-header">
           <div class="integration-icon google">
@@ -463,6 +613,13 @@ export function renderSettingsPanel(
     </div>
   `;
 
+  const tabContent =
+    activeTab === "profile"
+      ? profileTabContent
+      : activeTab === "model"
+        ? modelTabContent
+        : integrationsTabContent;
+
   return `
     <div class="settings-overlay" data-action="close-settings">
       <div class="settings-panel">
@@ -471,7 +628,14 @@ export function renderSettingsPanel(
           <button class="settings-close" data-action="close-settings">&times;</button>
         </div>
         <div class="settings-tabs">
-          <button class="settings-tab ${isModelTab ? "active" : ""}" data-action="tab-model">
+          <button class="settings-tab ${activeTab === "profile" ? "active" : ""}" data-action="tab-profile">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            Profile
+          </button>
+          <button class="settings-tab ${activeTab === "model" ? "active" : ""}" data-action="tab-model">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 2L2 7l10 5 10-5-10-5z"/>
               <path d="M2 17l10 5 10-5"/>
@@ -479,7 +643,7 @@ export function renderSettingsPanel(
             </svg>
             AI Model
           </button>
-          <button class="settings-tab ${!isModelTab ? "active" : ""}" data-action="tab-integrations">
+          <button class="settings-tab ${activeTab === "integrations" ? "active" : ""}" data-action="tab-integrations">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"/>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -488,7 +652,7 @@ export function renderSettingsPanel(
           </button>
         </div>
         <div class="settings-content">
-          ${isModelTab ? modelTabContent : integrationsTabContent}
+          ${tabContent}
         </div>
       </div>
     </div>
@@ -509,6 +673,7 @@ export function attachSettingsHandlers(
   onSaveModel?: (model: string) => void,
   onTabChange?: (tab: SettingsTab) => void,
   signal?: AbortSignal,
+  onSaveProfile?: (profile: UserProfile) => void,
 ): void {
   container.addEventListener(
     "click",
@@ -539,6 +704,22 @@ export function attachSettingsHandlers(
           }
           break;
         }
+        case "save-profile": {
+          const contactInput = document.getElementById(
+            "profile-contact-name",
+          ) as HTMLInputElement | null;
+          const firmInput = document.getElementById("profile-firm-name") as HTMLInputElement | null;
+          if (contactInput && firmInput && onSaveProfile) {
+            onSaveProfile({
+              contactName: contactInput.value.trim(),
+              firmName: firmInput.value.trim(),
+            });
+          }
+          break;
+        }
+        case "tab-profile":
+          onTabChange?.("profile");
+          break;
         case "tab-model":
           onTabChange?.("model");
           break;

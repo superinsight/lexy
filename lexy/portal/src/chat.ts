@@ -4,6 +4,7 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  isSystem?: boolean;
 };
 
 export type ChatState = {
@@ -12,6 +13,7 @@ export type ChatState = {
   sending: boolean;
   runId: string | null;
   sessionKey: string;
+  processingStatus: string | null;
 };
 
 function looksLikeJson(text: string): boolean {
@@ -98,6 +100,9 @@ const INTERNAL_MESSAGE_PATTERNS = [
   "memory/2025",
   "Store durable memories now",
   "Sender (untrusted metadata)",
+  "A scheduled reminder has been triggered",
+  "Handle this reminder internally",
+  "[CRON_TRIGGER]",
 ];
 
 function isInternalMessage(text: string): boolean {
@@ -109,7 +114,14 @@ function isSilentToken(text: string): boolean {
   if (SILENT_TOKENS.some((token) => trimmed === token)) {
     return true;
   }
-  return SILENT_PATTERNS.some((pat) => trimmed === pat);
+  if (SILENT_PATTERNS.some((pat) => trimmed === pat)) {
+    return true;
+  }
+  // Catch transient streaming prefixes of NO_REPLY (e.g. bare "NO")
+  if (trimmed === trimmed.toUpperCase() && trimmed === "NO") {
+    return true;
+  }
+  return false;
 }
 
 function stripSilentTokens(text: string): string {
@@ -122,11 +134,6 @@ function stripSilentTokens(text: string): string {
 
 function cleanText(text: string): string {
   let cleaned = text;
-
-  // Filter out internal system messages (memory flush, sender metadata, etc.)
-  if (isInternalMessage(cleaned)) {
-    return "";
-  }
 
   // Repair mojibake (UTF-8 bytes misread as Latin-1)
   cleaned = repairMojibake(cleaned);
@@ -202,6 +209,7 @@ export function createChatState(sessionKey: string): ChatState {
     sending: false,
     runId: null,
     sessionKey,
+    processingStatus: null,
   };
 }
 
@@ -217,15 +225,19 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
       state.messages = res.messages
         .map((m) => {
           const msg = m as Record<string, unknown>;
+          if (msg.role !== "user" && msg.role !== "assistant") {
+            return null;
+          }
           const text = extractText(m);
-          // Skip messages with no text content (tool-only messages)
           if (!text || !text.trim()) {
             return null;
           }
+          const system = (msg.role === "user" && isInternalMessage(text)) || undefined;
           return {
-            role: (msg.role as "user" | "assistant") ?? "assistant",
+            role: msg.role ?? "assistant",
             content: text,
             timestamp: (msg.timestamp as number) ?? Date.now(),
+            isSystem: system,
           };
         })
         .filter((m): m is Message => m !== null);
@@ -252,40 +264,91 @@ export type ChatAttachment = {
   type: string;
   mimeType: string;
   fileName: string;
-  content: string;
+  content?: string;
+  uploadId?: string;
 };
 
-export async function fileToAttachment(file: File): Promise<ChatAttachment> {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  const base64 = btoa(binary);
-  return {
-    type: file.type.startsWith("image/") ? "image" : "file",
-    mimeType: file.type || "application/octet-stream",
-    fileName: file.name,
-    content: base64,
+type UploadResult = {
+  ok: boolean;
+  uploadId?: string;
+  error?: string;
+  fileName: string;
+  mimeType: string;
+};
+
+export function wsUrlToHttpUrl(wsUrl: string): string {
+  return wsUrl.replace(/^ws(s?):\/\//, "http$1://");
+}
+
+async function uploadFileViaHttp(
+  file: File,
+  httpBaseUrl: string,
+  authToken?: string,
+): Promise<UploadResult> {
+  const headers: Record<string, string> = {
+    "Content-Type": file.type || "application/octet-stream",
+    "X-File-Name": encodeURIComponent(file.name),
   };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const res = await fetch(`${httpBaseUrl}/api/chat/upload`, {
+    method: "POST",
+    headers,
+    body: file,
+  });
+
+  const mimeType = file.type || "application/octet-stream";
+  if (!res.ok) {
+    let error = `Upload failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) {
+        error = body.error;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return { ok: false, error, fileName: file.name, mimeType };
+  }
+
+  const body = (await res.json()) as { ok: boolean; uploadId?: string; error?: string };
+  if (!body.ok || !body.uploadId) {
+    return { ok: false, error: body.error ?? "upload failed", fileName: file.name, mimeType };
+  }
+  return { ok: true, uploadId: body.uploadId, fileName: file.name, mimeType };
+}
+
+export async function uploadFiles(
+  files: File[],
+  httpBaseUrl: string,
+  authToken?: string,
+): Promise<UploadResult[]> {
+  return Promise.all(files.map((f) => uploadFileViaHttp(f, httpBaseUrl, authToken)));
 }
 
 export async function sendMessage(
   client: GatewayClient,
   state: ChatState,
   text: string,
-  attachments?: ChatAttachment[],
+  opts?: {
+    files?: File[];
+    httpBaseUrl?: string;
+    authToken?: string;
+    onStateChange?: () => void;
+  },
 ): Promise<void> {
   const trimmed = text.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if ((!trimmed && !hasAttachments) || state.sending) {
+  const files = opts?.files;
+  const hasFiles = files && files.length > 0;
+  if ((!trimmed && !hasFiles) || state.sending) {
     return;
   }
 
   const runId = crypto.randomUUID();
 
-  const fileNames = hasAttachments ? attachments.map((a) => a.fileName).join(", ") : "";
+  const fileNames = hasFiles ? files.map((f) => f.name).join(", ") : "";
   const displayContent = trimmed + (fileNames ? `\n[Attached: ${fileNames}]` : "");
 
   state.messages.push({
@@ -298,13 +361,58 @@ export async function sendMessage(
   state.runId = runId;
   state.streaming = "";
 
+  if (hasFiles) {
+    const hasPdf = files.some(
+      (f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf",
+    );
+    state.processingStatus = hasPdf ? "Uploading and extracting PDF…" : "Uploading attachments…";
+    opts?.onStateChange?.();
+  }
+
+  let attachments: ChatAttachment[] | undefined;
+  if (hasFiles && opts?.httpBaseUrl) {
+    try {
+      const results = await uploadFiles(files, opts.httpBaseUrl, opts.authToken);
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        const errMsg = failed.map((f) => `${f.fileName}: ${f.error}`).join("; ");
+        throw new Error(errMsg);
+      }
+      attachments = results.map((r) => ({
+        type: r.mimeType.startsWith("image/") ? "image" : "file",
+        mimeType: r.mimeType,
+        fileName: r.fileName,
+        uploadId: r.uploadId,
+      }));
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      state.messages.push({
+        role: "assistant",
+        content: `Upload failed: ${errMsg}`,
+        timestamp: Date.now(),
+      });
+      state.runId = null;
+      state.streaming = null;
+      state.sending = false;
+      state.processingStatus = null;
+      return;
+    }
+
+    state.processingStatus = files.some(
+      (f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf",
+    )
+      ? "Extracting PDF content…"
+      : "Processing attachments…";
+    opts?.onStateChange?.();
+  }
+
   try {
     await client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: trimmed || "(see attached files)",
       deliver: false,
       idempotencyKey: runId,
-      ...(hasAttachments ? { attachments } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -323,7 +431,22 @@ export async function sendMessage(
     state.streaming = null;
   } finally {
     state.sending = false;
+    state.processingStatus = null;
   }
+}
+
+function isSessionKeyMatch(eventKey: string | undefined, ownKey: string): boolean {
+  if (!eventKey) {
+    return false;
+  }
+  if (eventKey === ownKey) {
+    return true;
+  }
+  // Canonical keys have the form "agent:{agentId}:{rawKey}"; match any agent prefix.
+  if (eventKey.startsWith("agent:") && eventKey.endsWith(`:${ownKey}`)) {
+    return true;
+  }
+  return false;
 }
 
 export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
@@ -338,10 +461,7 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
         }
       | undefined;
 
-    // Check if this is a streaming assistant event for our session
-    const isOurSession =
-      payload?.sessionKey === state.sessionKey ||
-      payload?.sessionKey === `agent:main:${state.sessionKey}`;
+    const isOurSession = isSessionKeyMatch(payload?.sessionKey, state.sessionKey);
 
     if (payload?.stream === "assistant" && isOurSession && payload.data?.text) {
       const cleaned = cleanText(payload.data.text);
@@ -375,10 +495,7 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
     return false;
   }
 
-  // Check session key match (handle both direct and prefixed formats)
-  const isOurSession =
-    payload.sessionKey === state.sessionKey ||
-    payload.sessionKey === `agent:main:${state.sessionKey}`;
+  const isOurSession = isSessionKeyMatch(payload.sessionKey, state.sessionKey);
 
   if (!isOurSession) {
     return false;

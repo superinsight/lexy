@@ -11,29 +11,67 @@ export type ModelConfig = {
   model: string;
 };
 
-const AVAILABLE_MODELS = [
-  // OpenAI — frontier models for professional (legal/medical) work
-  { id: "gpt-5.4", label: "GPT-5.4", provider: "openai" },
-  { id: "gpt-5.4-pro", label: "GPT-5.4 Pro", provider: "openai" },
-  { id: "gpt-5", label: "GPT-5", provider: "openai" },
-  { id: "gpt-5-mini", label: "GPT-5 Mini", provider: "openai" },
-  { id: "gpt-4.1", label: "GPT-4.1", provider: "openai" },
-  // Anthropic — latest generation models
-  { id: "claude-opus-4-6", label: "Claude Opus 4.6", provider: "anthropic" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "anthropic" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "anthropic" },
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "anthropic" },
-  // Google — latest Gemini models
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro (Preview)", provider: "google" },
-  { id: "gemini-3-flash", label: "Gemini 3 Flash", provider: "google" },
-  {
-    id: "gemini-3.1-flash-lite-preview",
-    label: "Gemini 3.1 Flash-Lite (Preview)",
-    provider: "google",
-  },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "google" },
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "google" },
-];
+export type AvailableModel = {
+  id: string;
+  label: string;
+  provider: string;
+};
+
+let cachedModels: AvailableModel[] | null = null;
+
+function humanizeModelId(id: string): string {
+  return id.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const viteEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
+
+export async function fetchAvailableModels(): Promise<AvailableModel[]> {
+  if (cachedModels) {
+    return cachedModels;
+  }
+
+  const isDev = viteEnv?.DEV === "true" || location.hostname === "localhost";
+  const directUrl =
+    viteEnv?.LEXY_PROXY_BASE_URL ??
+    localStorage.getItem("lexy_proxy_base_url") ??
+    "http://localhost:4000";
+  const modelsUrl = isDev ? "/lexy-proxy/models" : `${directUrl}/models`;
+  const proxyKey = viteEnv?.LEXY_PROXY_API_KEY ?? localStorage.getItem("lexy_proxy_api_key") ?? "";
+
+  try {
+    const headers: Record<string, string> = {};
+    if (proxyKey) {
+      headers["Authorization"] = `Bearer ${proxyKey}`;
+    }
+
+    const res = await fetch(modelsUrl, { headers });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const json = (await res.json()) as {
+      data: Array<{
+        id?: string;
+        model?: string;
+        provider?: string;
+        owned_by?: string;
+        active?: boolean;
+      }>;
+    };
+
+    cachedModels = json.data
+      .filter((m) => m.active !== false)
+      .map((m) => {
+        const rawId = m.model ?? m.id ?? "unknown";
+        const provider = m.provider ?? m.owned_by ?? "unknown";
+        return { id: rawId, label: humanizeModelId(rawId), provider };
+      });
+    return cachedModels;
+  } catch (err) {
+    console.warn("[Models] Remote fetch failed:", err);
+    return [];
+  }
+}
 
 export type UserProfile = {
   firmName: string;
@@ -50,6 +88,7 @@ export type SettingsState = {
   modelLoading: boolean;
   loading: boolean;
   userProfile: UserProfile;
+  availableModels: AvailableModel[];
 };
 
 const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -178,6 +217,7 @@ export function createSettingsState(): SettingsState {
     modelLoading: false,
     loading: false,
     userProfile: loadUserProfile(),
+    availableModels: [],
   };
 }
 
@@ -361,7 +401,6 @@ export async function disconnectGoogle(client: GatewayClient): Promise<void> {
 // --- Model configuration ---
 
 export async function loadModelConfig(client: GatewayClient, state: SettingsState): Promise<void> {
-  const fallback: ModelConfig = { provider: "openai", model: "gpt-5.4" };
   state.modelLoading = true;
   try {
     const res = await client.request<{
@@ -378,18 +417,17 @@ export async function loadModelConfig(client: GatewayClient, state: SettingsStat
     const primaryRef = typeof modelField === "string" ? modelField : modelField?.primary;
 
     if (!primaryRef) {
-      state.modelConfig = fallback;
+      state.modelConfig = null;
       return;
     }
 
-    // primaryRef is "provider/model" (e.g. "openai/gpt-5.4")
     const slashIdx = primaryRef.indexOf("/");
     const provider = slashIdx > 0 ? primaryRef.slice(0, slashIdx) : "openai";
     const modelId = slashIdx > 0 ? primaryRef.slice(slashIdx + 1) : primaryRef;
 
     state.modelConfig = { provider, model: modelId };
   } catch {
-    state.modelConfig = fallback;
+    state.modelConfig = null;
   } finally {
     state.modelLoading = false;
   }
@@ -398,12 +436,13 @@ export async function loadModelConfig(client: GatewayClient, state: SettingsStat
 export async function saveModelConfig(
   client: GatewayClient,
   model: string,
+  models: AvailableModel[] = [],
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const snapshot = await client.request<{ hash?: string }>("config.get", {});
     const baseHash = snapshot.hash;
 
-    const selected = AVAILABLE_MODELS.find((m) => m.id === model);
+    const selected = models.find((m) => m.id === model);
     const provider = selected?.provider ?? "openai";
     const modelRef = `${provider}/${model}`;
 
@@ -487,14 +526,16 @@ export function renderSettingsPanel(
         </div>
       `;
 
-  const currentModel = state.modelConfig?.model ?? "gpt-5.4";
+  const currentModel = state.modelConfig?.model ?? state.availableModels[0]?.id ?? "";
   const providerLabels: Record<string, string> = {
     openai: "OpenAI",
     anthropic: "Anthropic",
     google: "Google",
+    gemini: "Google Gemini",
   };
-  const grouped = new Map<string, typeof AVAILABLE_MODELS>();
-  for (const m of AVAILABLE_MODELS) {
+  const models = state.availableModels;
+  const grouped = new Map<string, AvailableModel[]>();
+  for (const m of models) {
     const list = grouped.get(m.provider) ?? [];
     list.push(m);
     grouped.set(m.provider, list);

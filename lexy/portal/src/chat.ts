@@ -242,9 +242,11 @@ export async function loadHistory(client: GatewayClient, state: ChatState): Prom
         })
         .filter((m): m is Message => m !== null);
 
-      // If we were waiting for a response and a new assistant message arrived, reset thinking state
+      // If a new assistant message appeared in server history, clear streaming/thinking
+      // state. This covers both user-initiated runs (runId set) and cron-triggered
+      // runs (runId null) where polling can beat the WebSocket "final" event.
       const newLastMessage = state.messages[state.messages.length - 1];
-      if (state.runId !== null && newLastMessage?.role === "assistant") {
+      if (newLastMessage?.role === "assistant") {
         const isNewMessage =
           !prevLastMessage ||
           prevLastMessage.role !== "assistant" ||
@@ -519,11 +521,17 @@ export function handleEvent(state: ChatState, evt: GatewayEventFrame): boolean {
     const text = extractText(payload.message);
     const finalContent = text ?? state.streaming ?? "";
     if (finalContent.trim() && !isSilentToken(finalContent)) {
-      state.messages.push({
-        role: "assistant",
-        content: stripSilentTokens(finalContent),
-        timestamp: Date.now(),
-      });
+      const stripped = stripSilentTokens(finalContent);
+      // Skip if polling already added this message to avoid duplicates
+      const last = state.messages[state.messages.length - 1];
+      const alreadyPresent = last?.role === "assistant" && last.content === stripped;
+      if (!alreadyPresent) {
+        state.messages.push({
+          role: "assistant",
+          content: stripped,
+          timestamp: Date.now(),
+        });
+      }
     }
     state.streaming = null;
     state.runId = null;

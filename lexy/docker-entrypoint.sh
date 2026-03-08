@@ -9,7 +9,7 @@ CONFIG_FILE="${OPENCLAW_DIR}/openclaw.json"
 
 # ---------- 1. Deploy Lexy workspace config ----------
 echo "==> Deploying Lexy workspace config..."
-bash /app/lexy/setup.sh --force \
+bash /app/lexy/setup-workspace.sh --force \
   --workspace "${OPENCLAW_WORKSPACE_DIR:-${OPENCLAW_DIR}/workspace}"
 
 # ---------- 2. Write gateway config (merge, preserving user-saved settings) ----------
@@ -38,46 +38,7 @@ cfg.gateway.controlUi.allowedOrigins = [
 fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
 "
 
-# ---------- 2b. Inject AI API key + default model if provided via env ----------
-node -e "
-const fs = require('fs');
-const cfgPath = '${CONFIG_FILE}';
-let cfg = {};
-try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch {}
-
-let changed = false;
-
-// Inject API keys from env into config.env
-const keyMap = {
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-};
-for (const [envName, val] of Object.entries(keyMap)) {
-  if (val) {
-    cfg.env = cfg.env || {};
-    cfg.env[envName] = val;
-    changed = true;
-    console.log('  Injected ' + envName);
-  }
-}
-
-// Inject default model (e.g. 'openai/gpt-5.4')
-const defaultModel = process.env.LEXY_DEFAULT_MODEL;
-if (defaultModel) {
-  cfg.agents = cfg.agents || {};
-  cfg.agents.defaults = cfg.agents.defaults || {};
-  cfg.agents.defaults.model = { primary: defaultModel };
-  changed = true;
-  console.log('  Set default model to ' + defaultModel);
-}
-
-if (changed) {
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
-}
-"
-
-# ---------- 2c. Proxy mode: route LLM calls through a remote proxy ----------
+# ---------- 2b. Proxy mode: route LLM calls through a remote proxy ----------
 if [ -n "${LEXY_PROXY_BASE_URL:-}" ]; then
   echo "==> Configuring proxy mode (base URL: ${LEXY_PROXY_BASE_URL})"
   node -e "
@@ -130,6 +91,12 @@ if [ -f "$PORTAL_INDEX" ]; then
   fi
   if [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
     INJECT+="localStorage.setItem('google_client_secret','${GOOGLE_OAUTH_CLIENT_SECRET}');"
+  fi
+  if [ -n "${LEXY_PROXY_BASE_URL:-}" ]; then
+    INJECT+="localStorage.setItem('lexy_proxy_base_url','${LEXY_PROXY_BASE_URL}');"
+  fi
+  if [ -n "${LEXY_PROXY_API_KEY:-}" ]; then
+    INJECT+="localStorage.setItem('lexy_proxy_api_key','${LEXY_PROXY_API_KEY}');"
   fi
   INJECT+="<\/script>"
   sed -i "s|<head>|<head>${INJECT}|" "$PORTAL_INDEX" || echo "WARN: could not inject token into portal"

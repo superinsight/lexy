@@ -3,6 +3,7 @@ import { createChatState, loadHistory, sendMessage, handleEvent, wsUrlToHttpUrl 
 import { GatewayClient } from "./gateway";
 import {
   createSettingsState,
+  fetchAvailableModels,
   loadGoogleStatus,
   loadModelConfig,
   loadUserProfileFromAgent,
@@ -713,8 +714,13 @@ function renderSettings() {
 
 function openSettings() {
   settingsState.visible = true;
+  void Promise.all([fetchAvailableModels(), loadModelConfig(client, settingsState)]).then(
+    ([models]) => {
+      settingsState.availableModels = models;
+      renderSettings();
+    },
+  );
   void loadGoogleStatus(client, settingsState).then(renderSettings);
-  void loadModelConfig(client, settingsState).then(renderSettings);
   void loadUserProfileFromAgent(client, settingsState).then(renderSettings);
   renderSettings();
 }
@@ -741,7 +747,7 @@ async function handleSaveModel(model: string) {
     saveBtn.textContent = "Saving...";
   }
 
-  const result = await saveModelConfig(client, model);
+  const result = await saveModelConfig(client, model, settingsState.availableModels);
 
   if (result.success) {
     showToast("Model settings saved. Reconnecting...");

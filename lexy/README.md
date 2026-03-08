@@ -11,7 +11,8 @@ lexy/
 │   └── src/
 ├── integrations/        # Lexy-specific integrations
 │   └── google-workspace/  # Google Workspace (Gmail, Calendar, Drive)
-├── setup.sh             # Deploy config to ~/.openclaw/workspace/
+├── setup-workspace.sh   # Deploy workspace templates to ~/.openclaw/workspace/
+├── setup-proxy.sh       # Configure proxy routing for local dev
 └── README.md
 ```
 
@@ -39,13 +40,13 @@ Run the setup script to copy templates to `~/.openclaw/workspace/`:
 
 ```bash
 # First-time setup (won't overwrite existing files)
-./lexy/setup.sh
+./lexy/setup-workspace.sh
 
 # Force overwrite all templates
-./lexy/setup.sh --force
+./lexy/setup-workspace.sh --force
 
 # Custom workspace path
-./lexy/setup.sh --workspace /path/to/workspace
+./lexy/setup-workspace.sh --workspace /path/to/workspace
 ```
 
 The script skips files that already exist unless `--force` is passed, so user customizations are preserved.
@@ -56,39 +57,38 @@ The portal (`lexy/portal/`) is a simplified chat interface designed for non-tech
 
 ### Local Development
 
-Start the gateway and portal in two separate terminals:
+#### 1. Configure proxy routing
+
+Edit `lexy/.env` with your proxy settings (see [AI Model Configuration](#ai-model-configuration-proxy-mode)), then apply them:
 
 ```bash
-# Terminal 1: Start the gateway
-pnpm gateway:dev
-
-# Terminal 2: Start the portal
-cd lexy/portal
-npm install
-npm run dev
+./lexy/setup-proxy.sh proxy
 ```
 
-For auto-rebuild and reload on source changes, use `gateway:watch` instead:
+#### 2. Start the gateway and portal
 
 ```bash
 # Terminal 1: Gateway with auto-rebuild + restart on source changes
 pnpm gateway:watch
 
-# Terminal 2: Portal with Vite hot-reload (already watches by default)
-cd lexy/portal && npm run dev
+# Terminal 2: Portal with Vite hot-reload
+cd lexy/portal && npm install && npm run dev
 ```
 
-Find the gateway token (dev mode uses `~/.openclaw-dev/`):
-
-```bash
-node -e "console.log(JSON.parse(require('fs').readFileSync(require('os').homedir()+'/.openclaw-dev/openclaw.json','utf8')).gateway?.auth?.token)"
-```
-
-Then open (dev gateway runs on port 19001):
+Then open the portal URL:
 
 ```
 http://localhost:5174/?gateway=ws://localhost:19001&token=YOUR_TOKEN
 ```
+
+#### Reconfigure proxy routing
+
+```bash
+# Check current configuration
+./lexy/setup-proxy.sh status
+```
+
+Restart the gateway after making changes.
 
 ### Docker
 
@@ -126,43 +126,35 @@ Or set your own token via `lexy/.env`:
 OPENCLAW_GATEWAY_TOKEN=my-secret-token
 ```
 
-#### Pre-configuring the AI model
+#### AI Model Configuration (Proxy Mode)
 
-To avoid requiring users to enter their own API key in Settings, add the key and default model to `lexy/.env`:
-
-```env
-# Provide the key for your chosen provider
-OPENAI_API_KEY=sk-...
-# Or: ANTHROPIC_API_KEY=sk-ant-...
-# Or: GEMINI_API_KEY=AI...
-
-# Set the default model (provider/model format)
-LEXY_DEFAULT_MODEL=openai/gpt-5.4
-```
-
-The entrypoint injects these into the gateway config on every container start. Users can still change the model via Settings if needed.
-
-#### Proxy mode (usage metering and billing)
-
-Instead of calling OpenAI/Anthropic/Gemini directly, you can route all LLM API calls through your own proxy server. This lets you track per-customer token usage, enforce quotas, and disable access when limits are exceeded.
+All LLM API calls are routed through a proxy server. The proxy handles provider authentication, usage metering, and billing. No individual provider API keys are needed.
 
 ```env
-# Your proxy server URL
-LEXY_PROXY_BASE_URL=https://your-proxy.example.com
-
-# Per-customer API key that your proxy validates
-LEXY_PROXY_API_KEY=customer-abc-key-123
+LEXY_PROXY_BASE_URL=http://localhost:4000
+LEXY_PROXY_API_KEY=lexy_abc123
 ```
 
-When `LEXY_PROXY_BASE_URL` is set, the entrypoint rewrites all provider base URLs:
+When `LEXY_PROXY_BASE_URL` is set:
 
-| Provider  | Proxied URL                          |
-| --------- | ------------------------------------ |
-| OpenAI    | `{LEXY_PROXY_BASE_URL}/openai/v1`    |
-| Anthropic | `{LEXY_PROXY_BASE_URL}/anthropic/v1` |
-| Google    | `{LEXY_PROXY_BASE_URL}/gemini/v1`    |
+1. **Model discovery** — The portal Settings page fetches available models from `{LEXY_PROXY_BASE_URL}/models` (with `Authorization: Bearer {LEXY_PROXY_API_KEY}`). No models are hardcoded; the proxy is the source of truth.
 
-The `LEXY_PROXY_API_KEY` is sent as the `Authorization: Bearer` header on every LLM request. Your proxy validates it, meters usage, and forwards to the real provider.
+2. **Message routing** — The gateway routes all LLM calls through the proxy:
+
+| Provider  | Proxy path                           | Forwards to                                    |
+| --------- | ------------------------------------ | ---------------------------------------------- |
+| OpenAI    | `{LEXY_PROXY_BASE_URL}/openai/v1`    | `https://api.openai.com/v1`                    |
+| Anthropic | `{LEXY_PROXY_BASE_URL}/anthropic/v1` | `https://api.anthropic.com/v1`                 |
+| Gemini    | `{LEXY_PROXY_BASE_URL}/gemini/v1`    | `https://generativelanguage.googleapis.com/v1` |
+
+The proxy is a transparent pass-through — request and response formats are identical to the native provider APIs. The `LEXY_PROXY_API_KEY` is sent as the `Authorization: Bearer` header on every request so the proxy can authenticate and meter usage.
+
+##### Verify the proxy is reachable
+
+```bash
+curl -s http://localhost:4000/models \
+  -H "Authorization: Bearer lexy_abc123" | python3 -m json.tool
+```
 
 See [`lexy/portal/SERVER.md`](portal/SERVER.md) for a complete guide on building the proxy service.
 

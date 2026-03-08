@@ -70,22 +70,32 @@ cfg.models = cfg.models || {};
 cfg.models.providers = cfg.models.providers || {};
 
 const routes = {
-  openai:    '/openai/v1',
-  anthropic: '/anthropic/v1',
-  google:    '/gemini/v1',
+  openai:    { path: '/openai/v1',    api: 'openai-responses' },
+  anthropic: { path: '/anthropic/v1', api: 'anthropic-messages' },
+  google:    { path: '/gemini/v1beta', api: 'google-generative-ai' },
+  gemini:    { path: '/gemini/v1beta', api: 'google-generative-ai' },
 };
 
 const proxyBase = '$PROXY_BASE';
 const proxyKey  = '$PROXY_KEY';
 
-for (const [provider, path] of Object.entries(routes)) {
+for (const [provider, route] of Object.entries(routes)) {
   const existing = cfg.models.providers[provider] || {};
-  cfg.models.providers[provider] = {
+  const entry = {
     ...existing,
-    baseUrl: proxyBase + path,
+    baseUrl: proxyBase + route.path,
+    api:     route.api,
     apiKey:  proxyKey,
     models:  existing.models || [],
   };
+  // The @google/genai SDK sends auth via x-goog-api-key, but the proxy
+  // expects Authorization: Bearer. Inject the Bearer header explicitly and
+  // use a dummy apiKey so the SDK doesn't error on missing key.
+  if (route.api === 'google-generative-ai') {
+    entry.apiKey = 'proxy';
+    entry.headers = { Authorization: 'Bearer ' + proxyKey };
+  }
+  cfg.models.providers[provider] = entry;
 }
 
 fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
@@ -95,9 +105,10 @@ fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
     echo "  Portal    → http://localhost:${PORTAL_PORT}"
     [ -n "$GATEWAY_TOKEN" ] && echo "  Token     → ${GATEWAY_TOKEN}"
     echo ""
-    echo "  OpenAI    → ${PROXY_BASE}/openai/v1"
-    echo "  Anthropic → ${PROXY_BASE}/anthropic/v1"
-    echo "  Gemini    → ${PROXY_BASE}/gemini/v1"
+    echo "  OpenAI     → ${PROXY_BASE}/openai/v1"
+    echo "  Anthropic  → ${PROXY_BASE}/anthropic/v1"
+    echo "  Google     → ${PROXY_BASE}/gemini/v1beta"
+    echo "  Gemini     → ${PROXY_BASE}/gemini/v1beta"
     echo ""
     echo "Done. Restart the gateway for changes to take effect."
     ;;

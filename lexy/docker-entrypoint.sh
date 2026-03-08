@@ -54,18 +54,27 @@ cfg.models = cfg.models || {};
 cfg.models.providers = cfg.models.providers || {};
 
 const providerRoutes = {
-  openai:    { path: '/openai/v1',    api: 'openai-responses' },
-  anthropic: { path: '/anthropic/v1', api: 'anthropic-messages' },
-  google:    { path: '/gemini/v1',    api: 'google-generative-ai' },
+  openai:    { path: '/openai/v1',     api: 'openai-responses' },
+  anthropic: { path: '/anthropic/v1',  api: 'anthropic-messages' },
+  google:    { path: '/gemini/v1beta', api: 'google-generative-ai' },
+  gemini:    { path: '/gemini/v1beta', api: 'google-generative-ai' },
 };
 
 for (const [provider, route] of Object.entries(providerRoutes)) {
   const existing = cfg.models.providers[provider] || {};
-  cfg.models.providers[provider] = {
+  const entry = {
     ...existing,
     baseUrl: proxyBase + route.path,
-    ...(proxyKey ? { apiKey: proxyKey } : {}),
+    api: route.api,
+    models: existing.models || [],
   };
+  if (route.api === 'google-generative-ai' && proxyKey) {
+    entry.apiKey = 'proxy';
+    entry.headers = { Authorization: 'Bearer ' + proxyKey };
+  } else if (proxyKey) {
+    entry.apiKey = proxyKey;
+  }
+  cfg.models.providers[provider] = entry;
   console.log('  Proxy ' + provider + ' -> ' + proxyBase + route.path);
 }
 

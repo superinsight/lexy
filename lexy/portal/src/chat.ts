@@ -91,6 +91,19 @@ function isFileSizeError(text: string): boolean {
 const SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
 const SILENT_PATTERNS = ["(no output)", "(no result)"];
 
+const INTERNAL_MESSAGE_PATTERNS = [
+  "Pre-compaction memory flush",
+  "Pre-compaction memory flush turn",
+  "memory/2026",
+  "memory/2025",
+  "Store durable memories now",
+  "Sender (untrusted metadata)",
+];
+
+function isInternalMessage(text: string): boolean {
+  return INTERNAL_MESSAGE_PATTERNS.some((p) => text.includes(p));
+}
+
 function isSilentToken(text: string): boolean {
   const trimmed = text.trim();
   if (SILENT_TOKENS.some((token) => trimmed === token)) {
@@ -109,6 +122,11 @@ function stripSilentTokens(text: string): string {
 
 function cleanText(text: string): string {
   let cleaned = text;
+
+  // Filter out internal system messages (memory flush, sender metadata, etc.)
+  if (isInternalMessage(cleaned)) {
+    return "";
+  }
 
   // Repair mojibake (UTF-8 bytes misread as Latin-1)
   cleaned = repairMojibake(cleaned);

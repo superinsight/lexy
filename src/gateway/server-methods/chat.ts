@@ -11,6 +11,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { extractPdfContent } from "../../media/pdf-extract.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -30,7 +31,11 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatDocumentContent,
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -61,7 +66,66 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
-type TranscriptAppendResult = {
+const PDF_EXTRACT_MAX_PAGES = 5_000;
+const PDF_EXTRACT_MAX_PIXELS = 1_500_000;
+const PDF_EXTRACT_MIN_TEXT_CHARS = 50;
+
+async function extractPdfDocuments(
+  documents: ChatDocumentContent[],
+  log?: { warn: (msg: string) => void; info?: (msg: string) => void },
+): Promise<{ text: string; images: ChatImageContent[] }> {
+  const textParts: string[] = [];
+  const images: ChatImageContent[] = [];
+
+  for (const doc of documents) {
+    if (doc.mimeType !== "application/pdf") {
+      continue;
+    }
+    const label = doc.fileName ?? "PDF";
+    let extracted = false;
+    try {
+      const buffer = Buffer.from(doc.data, "base64");
+      log?.info?.(`extracting PDF content from ${label} (${buffer.length} bytes)`);
+      const result = await extractPdfContent({
+        buffer,
+        maxPages: PDF_EXTRACT_MAX_PAGES,
+        maxPixels: PDF_EXTRACT_MAX_PIXELS,
+        minTextChars: PDF_EXTRACT_MIN_TEXT_CHARS,
+        onImageExtractionError: (err) => {
+          log?.warn(`${label}: image extraction failed: ${String(err)}`);
+        },
+      });
+      if (result.text.trim()) {
+        let header = `[Content from ${label}]`;
+        if (result.totalPages > PDF_EXTRACT_MAX_PAGES) {
+          header += `\n[Note: This PDF has ${result.totalPages} pages but only the first ${PDF_EXTRACT_MAX_PAGES} were processed.]`;
+        }
+        textParts.push(`${header}\n${result.text}`);
+        extracted = true;
+      }
+      if (result.images.length > 0) {
+        for (const img of result.images) {
+          images.push({ type: "image", data: img.data, mimeType: img.mimeType });
+        }
+        extracted = true;
+      }
+      if (!extracted) {
+        log?.warn(`${label}: extraction returned no usable content`);
+      }
+    } catch (err) {
+      log?.warn(`PDF extraction failed for ${label}: ${String(err)}`);
+    }
+    if (!extracted) {
+      textParts.push(
+        `[The user attached a PDF file: ${label}. Text extraction was not possible — the file may be image-based or encrypted.]`,
+      );
+    }
+  }
+
+  return { text: textParts.join("\n\n"), images };
+}
+
+export type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
@@ -510,7 +574,7 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
   }
 }
 
-function appendAssistantTranscriptMessage(params: {
+export function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   sessionId: string;
@@ -892,11 +956,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: 50_000_000,
           log: context.logGateway,
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+
+        if (parsed.documents.length > 0) {
+          const pdfResult = await extractPdfDocuments(parsed.documents, context.logGateway);
+          if (pdfResult.text) {
+            parsedMessage = pdfResult.text + "\n\n" + parsedMessage;
+          }
+          parsedImages = [...parsedImages, ...pdfResult.images];
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;

@@ -255,6 +255,7 @@ async function runPdfPrompt(params: {
         const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
           text: e.text,
           images: [],
+          totalPages: e.totalPages,
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
         const message = await complete(model, context, {

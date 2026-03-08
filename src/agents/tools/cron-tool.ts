@@ -1,11 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -154,6 +157,24 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function isWebchatSession(cfg: ReturnType<typeof loadConfig>, agentSessionKey?: string): boolean {
+  if (!agentSessionKey) {
+    return false;
+  }
+  try {
+    const { mainKey, alias } = resolveMainSessionAlias(cfg);
+    const resolved = resolveInternalSessionKey({ key: agentSessionKey, alias, mainKey });
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg }),
+    });
+    const store = loadSessionStore(storePath);
+    const entry = store?.[resolved];
+    return isInternalMessageChannel(entry?.lastChannel);
+  } catch {
+    return false;
+  }
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
@@ -263,6 +284,7 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+For webchat/portal sessions without a delivery channel, isolated jobs are automatically converted to main-session systemEvent jobs so responses appear in the chat.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -403,6 +425,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                   ...delivery,
                   ...inferred,
                 } satisfies CronDelivery;
+              } else if (isWebchatSession(cfg, opts.agentSessionKey)) {
+                // Portal/webchat sessions have no outbound delivery channel.
+                // Convert isolated agentTurn to main-session systemEvent so the
+                // response is broadcast to the portal via heartbeat chat events.
+                const agentTurnPayload = (job as { payload: { message?: string } }).payload;
+                const messageText =
+                  typeof agentTurnPayload.message === "string" ? agentTurnPayload.message : "";
+                (job as Record<string, unknown>).sessionTarget = "main";
+                (job as Record<string, unknown>).payload = {
+                  kind: "systemEvent",
+                  text: messageText,
+                };
+                delete (job as Record<string, unknown>).delivery;
               }
             }
           }

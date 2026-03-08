@@ -482,6 +482,7 @@ describe("createPdfTool", () => {
       const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
+        totalPages: 1,
       });
 
       const piAi = await import("@mariozechner/pi-ai");

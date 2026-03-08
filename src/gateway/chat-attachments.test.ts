@@ -76,7 +76,7 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
-  it("drops non-image payloads and logs", async () => {
+  it("routes PDF payloads to documents instead of images", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
@@ -87,8 +87,10 @@ describe("parseMessageWithAttachments", () => {
       },
     ]);
     expect(parsed.images).toHaveLength(0);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/non-image/i);
+    expect(parsed.documents).toHaveLength(1);
+    expect(parsed.documents[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.documents[0]?.fileName).toBe("not-image.pdf");
+    expect(logs).toHaveLength(0);
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -112,11 +114,12 @@ describe("parseMessageWithAttachments", () => {
       { type: "file", fileName: "unknown.bin", content: unknown },
     ]);
     expect(parsed.images).toHaveLength(0);
+    expect(parsed.documents).toHaveLength(0);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unable to detect image mime type/i);
+    expect(logs[0]).toMatch(/unable to detect mime type/i);
   });
 
-  it("keeps valid images and drops invalid ones", async () => {
+  it("keeps valid images and routes PDFs to documents", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
@@ -128,14 +131,16 @@ describe("parseMessageWithAttachments", () => {
       {
         type: "file",
         mimeType: "image/png",
-        fileName: "not-image.pdf",
+        fileName: "report.pdf",
         content: pdf,
       },
     ]);
     expect(parsed.images).toHaveLength(1);
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
-    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+    expect(parsed.documents).toHaveLength(1);
+    expect(parsed.documents[0]?.mimeType).toBe("application/pdf");
+    expect(logs).toHaveLength(0);
   });
 });
 

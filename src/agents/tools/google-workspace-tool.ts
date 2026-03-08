@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { extractPdfContent } from "../../media/pdf-extract.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../auth-profiles.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -1087,6 +1088,42 @@ async function handleDriveRead(
     } catch {
       content = "[Content export failed - file may be too large or restricted]";
     }
+  } else {
+    const downloadUrl = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
+    try {
+      const downloadResponse = await fetchWithAuth(downloadUrl, agentDir);
+
+      if (metadata.mimeType === "application/pdf") {
+        const arrayBuffer = await downloadResponse.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const result = await extractPdfContent({
+          buffer,
+          maxPages: 5_000,
+          maxPixels: 1_500_000,
+          minTextChars: 50,
+        });
+        if (result.text.trim()) {
+          content = result.text;
+          if (result.totalPages > 5_000) {
+            content = `[Note: This PDF has ${result.totalPages} pages but only the first 5000 were processed.]\n\n${content}`;
+          }
+        } else {
+          content =
+            "[PDF appears to be image-based or encrypted — text extraction returned no usable content]";
+        }
+      } else if (
+        metadata.mimeType.startsWith("text/") ||
+        metadata.mimeType === "application/json" ||
+        metadata.mimeType === "application/xml" ||
+        metadata.mimeType === "application/csv"
+      ) {
+        content = await downloadResponse.text();
+      } else {
+        content = `[Binary file (${metadata.mimeType}) — download via viewLink to access content]`;
+      }
+    } catch (err) {
+      content = `[File download failed: ${err instanceof Error ? err.message : String(err)}]`;
+    }
   }
 
   return {
@@ -1126,7 +1163,7 @@ export function createGoogleWorkspaceTool(options?: { agentDir?: string }): AnyA
 - calendar_delete_event: Delete a calendar event
 - drive_list: List files in Google Drive
 - drive_search: Search files by content
-- drive_read: Read file metadata and content (exports Google Docs to text)`,
+- drive_read: Read file metadata and content (exports Google Docs to text, extracts text from PDFs, downloads text files)`,
     parameters: GoogleWorkspaceSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

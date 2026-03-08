@@ -12,6 +12,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import { createNotifyHttpHandler } from "./notify-http.js";
 import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
@@ -35,6 +36,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createUploadHttpHandler } from "./upload-http.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -118,6 +120,15 @@ export async function createGatewayRuntimeState(params: {
     logHooks: params.logHooks,
   });
 
+  const handleNotifyRequest = createNotifyHttpHandler({
+    broadcast,
+    resolvedAuth: params.resolvedAuth,
+  });
+
+  const handleUploadRequest = createUploadHttpHandler({
+    resolvedAuth: params.resolvedAuth,
+  });
+
   const handlePluginRequest = createGatewayPluginRequestHandler({
     registry: params.pluginRegistry,
     log: params.logPlugins,
@@ -154,6 +165,8 @@ export async function createGatewayRuntimeState(params: {
       openResponsesConfig: params.openResponsesConfig,
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleHooksRequest,
+      handleNotifyRequest,
+      handleUploadRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,

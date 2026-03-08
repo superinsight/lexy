@@ -14,9 +14,17 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
-export type ParsedMessageWithImages = {
+export type ChatDocumentContent = {
+  type: "document";
+  data: string;
+  mimeType: string;
+  fileName?: string;
+};
+
+export type ParsedMessageWithAttachments = {
   message: string;
   images: ChatImageContent[];
+  documents: ChatDocumentContent[];
 };
 
 type AttachmentLog = {
@@ -39,6 +47,14 @@ function normalizeMime(mime?: string): string | undefined {
 
 function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
+}
+
+function isPdfMime(mime?: string): boolean {
+  return mime === "application/pdf";
+}
+
+function isSupportedMime(mime?: string): boolean {
+  return isImageMime(mime) || isPdfMime(mime);
 }
 
 function isValidBase64(value: string): boolean {
@@ -90,22 +106,23 @@ function validateAttachmentBase64OrThrow(
 }
 
 /**
- * Parse attachments and extract images as structured content blocks.
- * Returns the message text and an array of image content blocks
- * compatible with Claude API's image format.
+ * Parse attachments and extract images and documents as structured content blocks.
+ * Images are returned as content blocks compatible with Claude API's image format.
+ * PDFs are returned as document content blocks for downstream extraction.
  */
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
   opts?: { maxBytes?: number; log?: AttachmentLog },
-): Promise<ParsedMessageWithImages> {
+): Promise<ParsedMessageWithAttachments> {
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], documents: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const documents: ChatDocumentContent[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,12 +137,24 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
-    if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+    const effectiveMime = sniffedMime ?? providedMime;
+
+    if (isPdfMime(effectiveMime)) {
+      documents.push({
+        type: "document",
+        data: b64,
+        mimeType: effectiveMime!,
+        fileName: att.fileName,
+      });
+      continue;
+    }
+
+    if (sniffedMime && !isSupportedMime(sniffedMime)) {
+      log?.warn(`attachment ${label}: unsupported type (${sniffedMime}), dropping`);
       continue;
     }
     if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+      log?.warn(`attachment ${label}: unable to detect mime type, dropping`);
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
@@ -141,7 +170,7 @@ export async function parseMessageWithAttachments(
     });
   }
 
-  return { message, images };
+  return { message, images, documents };
 }
 
 /**

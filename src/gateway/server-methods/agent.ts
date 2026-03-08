@@ -18,6 +18,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { extractPdfContent } from "../../media/pdf-extract.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -246,6 +247,39 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         message = parsed.message.trim();
         images = parsed.images;
+
+        for (const doc of parsed.documents) {
+          if (doc.mimeType !== "application/pdf") {
+            continue;
+          }
+          const label = doc.fileName ?? "PDF";
+          let extracted = false;
+          try {
+            const buffer = Buffer.from(doc.data, "base64");
+            const result = await extractPdfContent({
+              buffer,
+              maxPages: 50,
+              maxPixels: 1_500_000,
+              minTextChars: 50,
+              onImageExtractionError: (err) => {
+                context.logGateway.warn(`${label}: image extraction failed: ${String(err)}`);
+              },
+            });
+            if (result.text.trim()) {
+              message = `[Content from ${label}]\n${result.text}\n\n${message}`;
+              extracted = true;
+            }
+            for (const img of result.images) {
+              images.push({ type: "image", data: img.data, mimeType: img.mimeType });
+              extracted = true;
+            }
+          } catch (err) {
+            context.logGateway.warn(`PDF extraction failed for ${label}: ${String(err)}`);
+          }
+          if (!extracted) {
+            message = `[The user attached a PDF file: ${label}. Text extraction was not possible.]\n\n${message}`;
+          }
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;

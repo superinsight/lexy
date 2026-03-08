@@ -37,6 +37,7 @@ export type PdfExtractedImage = {
 export type PdfExtractedContent = {
   text: string;
   images: PdfExtractedImage[];
+  totalPages: number;
 };
 
 export async function extractPdfContent(params: {
@@ -68,9 +69,10 @@ export async function extractPdfContent(params: {
     }
   }
 
+  const totalPages = pdf.numPages;
   const text = textParts.join("\n\n");
   if (text.trim().length >= minTextChars) {
-    return { text, images: [] };
+    return { text, images: [], totalPages };
   }
 
   let canvasModule: CanvasModule;
@@ -78,7 +80,7 @@ export async function extractPdfContent(params: {
     canvasModule = await loadCanvasModule();
   } catch (err) {
     onImageExtractionError?.(err);
-    return { text, images: [] };
+    return { text, images: [], totalPages };
   }
 
   const { createCanvas } = canvasModule;
@@ -100,5 +102,5 @@ export async function extractPdfContent(params: {
     images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
   }
 
-  return { text, images };
+  return { text, images, totalPages };
 }

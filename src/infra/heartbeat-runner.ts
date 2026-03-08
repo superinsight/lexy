@@ -41,6 +41,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -699,6 +700,9 @@ export async function runHeartbeatOnce(opts: {
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+    // Surface inherits from the session's last channel so cron/heartbeat
+    // runs on webchat/portal sessions still emit chat events to the UI.
+    Surface: isInternalMessageChannel(entry?.lastChannel) ? entry.lastChannel : undefined,
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {

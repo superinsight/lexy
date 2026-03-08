@@ -125,6 +125,12 @@ if [ -f "$PORTAL_INDEX" ]; then
   INJECT="<script id=\"lexy-docker-bootstrap\">"
   INJECT+="localStorage.setItem('gateway_token','${GATEWAY_TOKEN}');"
   INJECT+="localStorage.setItem('gateway_url','ws://'+location.hostname+':${GATEWAY_PORT}');"
+  if [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
+    INJECT+="localStorage.setItem('google_client_id','${GOOGLE_OAUTH_CLIENT_ID}');"
+  fi
+  if [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
+    INJECT+="localStorage.setItem('google_client_secret','${GOOGLE_OAUTH_CLIENT_SECRET}');"
+  fi
   INJECT+="<\/script>"
   sed -i "s|<head>|<head>${INJECT}|" "$PORTAL_INDEX" || echo "WARN: could not inject token into portal"
 fi

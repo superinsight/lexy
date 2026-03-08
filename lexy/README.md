@@ -95,6 +95,9 @@ http://localhost:5174/?gateway=ws://localhost:19001&token=YOUR_TOKEN
 Build and run Lexy in a single container (gateway + portal):
 
 ```bash
+##Build and Start
+docker compose -f lexy/docker-compose.yml --env-file lexy/.env up --build
+
 # Build the image (run from repo root)
 docker compose -f lexy/docker-compose.yml build
 

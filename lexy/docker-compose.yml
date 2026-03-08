@@ -4,12 +4,12 @@ services:
       context: ..
       dockerfile: lexy/Dockerfile
     ports:
-      - "${PORTAL_PORT:-5174}:5174"
-      - "${GATEWAY_PORT:-18789}:18789"
+      - "${PORTAL_PORT:-5174}:${PORTAL_PORT:-5174}"
+      - "${GATEWAY_PORT:-18789}:${GATEWAY_PORT:-18789}"
     environment:
       GATEWAY_BIND: lan
-      GATEWAY_PORT: "18789"
-      PORTAL_PORT: "5174"
+      GATEWAY_PORT: "${GATEWAY_PORT:-18789}"
+      PORTAL_PORT: "${PORTAL_PORT:-5174}"
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-}"
       OPENCLAW_GATEWAY_PASSWORD: "${OPENCLAW_GATEWAY_PASSWORD:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
